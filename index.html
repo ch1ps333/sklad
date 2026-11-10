@@ -241,13 +241,15 @@ async function startCam(t,m){
   document.querySelectorAll('#modeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.m===mode));
   $('#found').classList.add('hide');
   $('#cam').classList.remove('hide');
-  try{
-    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
-  }catch(e){
+  const tries=[{width:{ideal:3840},height:{ideal:2160}},{width:{ideal:1920},height:{ideal:1080}},{}];
+  stream=null;let lastErr=null;
+  for(const t of tries){try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},...t}});break}catch(e){lastErr=e}}
+  if(!stream){
     $('#cam').classList.add('hide');
     toast(location.protocol!=='https:'?'Камера працює лише через https-посилання':'Немає доступу до камери: Налаштування → Safari → Камера → Дозволити');return;
   }
   vid.srcObject=stream;await vid.play().catch(()=>{});
+  setupZoom();
   try{wakeLock=await navigator.wakeLock?.request('screen')}catch(e){}
   running=true;resize();requestAnimationFrame(draw);
   if(mode==='ocr')ocrLoop();else imgLoop();
@@ -255,7 +257,21 @@ async function startCam(t,m){
 function stopCam(){running=false;stream&&stream.getTracks().forEach(t=>t.stop());stream=null;$('#cam').classList.add('hide');try{wakeLock&&wakeLock.release()}catch(e){};wakeLock=null}
 $('#stop').onclick=stopCam;
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)stopCam()});
-$('#zoom').onclick=e=>{const b=e.target.closest('button');if(!b)return;zoom=+b.dataset.z;document.querySelectorAll('#zoom button').forEach(x=>x.classList.toggle('on',x===b))};
+// Справжній зум камери (оптика/сенсор), якщо телефон дозволяє; інакше — цифрова рамка
+let hwZoom=null,curZoomBtn=1;
+function setupZoom(){
+  hwZoom=null;
+  try{const tr=stream.getVideoTracks()[0];const cap=tr.getCapabilities?tr.getCapabilities():{};if(cap.zoom&&cap.zoom.max>1)hwZoom={tr,min:cap.zoom.min||1,max:cap.zoom.max}}catch(e){}
+  const levels=hwZoom?[1,2,3,5,8].filter(z=>z<=hwZoom.max+0.01):[1,1.6,2.5];
+  $('#zoom').innerHTML=levels.map(z=>`<button data-z="${z}">${z}×</button>`).join('');
+  const want=levels.includes(curZoomBtn)?curZoomBtn:1;applyZoom(want);
+}
+async function applyZoom(z){
+  curZoomBtn=z;document.querySelectorAll('#zoom button').forEach(x=>x.classList.toggle('on',+x.dataset.z===z));
+  if(hwZoom){zoom=1;try{await hwZoom.tr.applyConstraints({advanced:[{zoom:Math.max(hwZoom.min,Math.min(hwZoom.max,z))}]})}catch(e){}}
+  else zoom=z;
+}
+$('#zoom').onclick=e=>{const b=e.target.closest('button');if(b)applyZoom(+b.dataset.z)};
 $('#modeSeg').onclick=e=>{const b=e.target.closest('button');if(!b||b.dataset.m===mode)return;const t=target;stopCam();startCam(t,b.dataset.m)};
 $('#startAll').onclick=()=>startCam(null,'ocr');
 
@@ -300,73 +316,112 @@ function showFound(it){
 }
 
 /* ================= OCR mode ================= */
-let worker=null,workerP=null;
-function getWorker(){
-  if(worker)return Promise.resolve(worker);
-  if(workerP)return workerP;
-  workerP=(async()=>{
-    setInfo('<span class="spin"></span> Завантажую розпізнавання тексту (перший раз ~10 с)…');
-    const w=await Tesseract.createWorker('eng',1);
-    await w.setParameters({tessedit_pageseg_mode:'11',tessedit_char_whitelist:'0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-./'});
-    worker=w;return w;
+// Кілька паралельних "читачів" + кадр ріжеться на шматки, які збільшуються перед читанням:
+// так дрібний індекс видно здалеку, а кадри обробляються швидше.
+let workers=[],sched=null,schedP=null,curWL='';
+const NW=Math.max(2,Math.min(4,(navigator.hardwareConcurrency||4)-1));
+function getSched(){
+  if(sched)return Promise.resolve(sched);
+  if(schedP)return schedP;
+  schedP=(async()=>{
+    setInfo('<span class="spin"></span> Завантажую розпізнавання тексту (перший раз ~10–20 с)…');
+    const s=Tesseract.createScheduler();
+    const ws=await Promise.all(Array.from({length:NW},()=>Tesseract.createWorker('eng',1)));
+    ws.forEach(w=>s.addWorker(w));workers=ws;sched=s;curWL='';return s;
   })();
-  workerP.catch(()=>{workerP=null});
-  return workerP;
+  schedP.catch(()=>{schedP=null});
+  return schedP;
+}
+async function setWhitelist(list){
+  // якщо всі індекси — лише цифри, читаємо тільки цифри: набагато точніше
+  const chars=new Set('-./');list.forEach(it=>norm(it.index).split('').forEach(c=>chars.add(c)));
+  let wl;const onlyDigits=[...chars].every(c=>/[0-9\-./]/.test(c));
+  wl=onlyDigits?'0123456789-./':'0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-./';
+  if(wl===curWL)return;curWL=wl;
+  await Promise.all(workers.map(w=>w.setParameters({tessedit_pageseg_mode:'11',tessedit_char_whitelist:wl,user_defined_dpi:'300'})));
 }
 function flattenWords(data){
   if(data.words&&data.words.length)return data.words;
   const out=[];(data.blocks||[]).forEach(b=>(b.paragraphs||[]).forEach(p=>(p.lines||[]).forEach(l=>(l.words||[]).forEach(w=>{w.line=l;out.push(w)}))));
   return out;
 }
-const ocrCan=document.createElement('canvas'),ocrCtx=ocrCan.getContext('2d',{willReadFrequently:true});
+const tileCans=[];
+function tilesFor(c){
+  const T=560,ov=0.15; // розмір шматка в пікселях камери, перекриття
+  const cols=Math.max(1,Math.round(c.w/T)),rows=Math.max(1,Math.round(c.h/T));
+  const tw=c.w/cols,th=c.h/rows,out=[];
+  for(let r=0;r<rows;r++)for(let q=0;q<cols;q++){
+    const x=Math.max(c.x,c.x+q*tw-tw*ov/2),y=Math.max(c.y,c.y+r*th-th*ov/2);
+    const w=Math.min(c.x+c.w-x,tw*(1+ov)),h=Math.min(c.y+c.h-y,th*(1+ov));
+    out.push({x,y,w,h});
+  }
+  return out;
+}
 function buildIndex(){
   const m=new Map();(target?[target]:items).forEach(it=>{const k=key(it.index);if(k.length>=2)m.set(k,it)});return m;
 }
+// повертає [item, 'full'|'part']
 function matchToken(tok,idx){
   if(tok.length<3)return null;
-  const hit=idx.get(tok);if(hit)return hit;
-  if(tok.length>=6){for(const [k,it] of idx){if(Math.abs(k.length-tok.length)<=1&&lev(k,tok)<=1)return it}}
+  const hit=idx.get(tok);if(hit)return[hit,'full'];
+  for(const [k,it] of idx){
+    if(k.length>=6&&Math.abs(k.length-tok.length)<=1&&lev(k,tok)<=1)return[it,'full'];
+    if(k.length>=9&&Math.abs(k.length-tok.length)<=2&&lev(k,tok)<=2)return[it,'full'];
+  }
+  if(target){ // частковий збіг: прочиталась більша частина індексу
+    for(const [k,it] of idx){if(tok.length>=Math.max(4,Math.ceil(k.length*0.6))&&k.includes(tok))return[it,'part']}
+  }
   return null;
 }
 async function ocrLoop(){
-  let w;try{w=await getWorker()}catch(e){setInfo('❌ Не вдалося завантажити розпізнавання. Перевір інтернет.');return}
+  let s;try{s=await getSched()}catch(e){setInfo('❌ Не вдалося завантажити розпізнавання. Перевір інтернет.');return}
+  const idx=buildIndex();await setWhitelist(target?[target]:items);
   setInfo(target?'Наводь камеру на полицю — шукаю індекс':'Наводь камеру на коробки');
-  const idx=buildIndex();let fps=0;
+  let partStreak=0;
   while(running&&mode==='ocr'){
     if(!vid.videoWidth){await new Promise(r=>setTimeout(r,100));continue}
     const t0=performance.now();
-    const c=cropRect();const OW=1100;const sc=OW/c.w;
-    ocrCan.width=OW;ocrCan.height=Math.round(c.h*sc);
-    ocrCtx.filter='grayscale(1) contrast(1.4)';
-    ocrCtx.drawImage(vid,c.x,c.y,c.w,c.h,0,0,ocrCan.width,ocrCan.height);
-    let data;try{({data}=await w.recognize(ocrCan,{},{text:true,blocks:true}))}catch(e){await new Promise(r=>setTimeout(r,300));continue}
+    const c=cropRect();const tiles=tilesFor(c);
+    const jobs=tiles.map((t,i)=>{
+      const cv=tileCans[i]||(tileCans[i]=document.createElement('canvas'));
+      const up=Math.min(2.2,1500/t.w); // збільшуємо шматок, щоб дрібні цифри стали читабельні
+      cv.width=Math.round(t.w*up);cv.height=Math.round(t.h*up);
+      const cx=cv.getContext('2d');cx.imageSmoothingQuality='high';cx.drawImage(vid,t.x,t.y,t.w,t.h,0,0,cv.width,cv.height);
+      return s.addJob('recognize',cv,{},{text:false,blocks:true}).then(r=>({t,up,data:r.data})).catch(()=>null);
+    });
+    const res=(await Promise.all(jobs)).filter(Boolean);
     if(!running||mode!=='ocr')break;
-    const words=flattenWords(data).filter(x=>x.confidence>35&&x.bbox);
-    // group by line for joining split indexes ("12 345-67")
-    const lines=new Map();words.forEach(x=>{const L=x.line||x.paragraph||{};if(!lines.has(L))lines.set(L,[]);lines.get(L).push(x)});
-    const now=performance.now();let foundMain=null;const seen=new Set();
-    for(const ws of lines.values()){
-      ws.sort((a,b)=>a.bbox.x0-b.bbox.x0);
-      for(let i=0;i<ws.length;i++){
-        let tok='';let bb=null;
-        for(let j=i;j<Math.min(ws.length,i+3);j++){
-          tok+=key(ws[j].text);const b=ws[j].bbox;
-          bb=bb?{x0:Math.min(bb.x0,b.x0),y0:Math.min(bb.y0,b.y0),x1:Math.max(bb.x1,b.x1),y1:Math.max(bb.y1,b.y1)}:{...b};
-          const it=matchToken(tok,idx);
-          if(it&&!seen.has(it)){
-            seen.add(it);
-            const pad=6,x0=c.x+(bb.x0-pad)/sc,y0=c.y+(bb.y0-pad)/sc,x1=c.x+(bb.x1+pad)/sc,y1=c.y+(bb.y1+pad)/sc;
-            const main=!!target;
-            hits.push({poly:[[x0,y0],[x1,y0],[x1,y1],[x0,y1]],label:target?'✓ '+(it.address||'ЗНАЙДЕНО'):(it.address||'—')+'  '+(it.name||'').slice(0,22),color:main?'#2ecc71':'#ffb020',main,t:now});
-            foundMain=foundMain||it;break;
+    const now=performance.now();let foundMain=null,foundPart=null;const seen=new Set();
+    for(const {t,up,data} of res){
+      const words=flattenWords(data).filter(x=>x.confidence>30&&x.bbox&&x.text);
+      const lines=new Map();words.forEach(x=>{const L=x.line||x.paragraph||{};if(!lines.has(L))lines.set(L,[]);lines.get(L).push(x)});
+      for(const ws of lines.values()){
+        ws.sort((a,b)=>a.bbox.x0-b.bbox.x0);
+        for(let i=0;i<ws.length;i++){
+          let tok='',bb=null;
+          for(let j=i;j<Math.min(ws.length,i+3);j++){
+            tok+=key(ws[j].text);const b=ws[j].bbox;
+            bb=bb?{x0:Math.min(bb.x0,b.x0),y0:Math.min(bb.y0,b.y0),x1:Math.max(bb.x1,b.x1),y1:Math.max(bb.y1,b.y1)}:{...b};
+            const m=matchToken(tok,idx);if(!m)continue;
+            const [it,kind]=m;const sk=it.index+kind;if(seen.has(sk))break;seen.add(sk);
+            const pad=8,x0=t.x+(bb.x0-pad)/up,y0=t.y+(bb.y0-pad)/up,x1=t.x+(bb.x1+pad)/up,y1=t.y+(bb.y1+pad)/up;
+            if(kind==='full'){
+              hits.push({poly:[[x0,y0],[x1,y0],[x1,y1],[x0,y1]],label:target?'✓ '+(it.address||'ЗНАЙДЕНО'):(it.address||'—')+'  '+(it.name||'').slice(0,22),color:target?'#2ecc71':'#ffb020',main:!!target,t:now});
+              foundMain=foundMain||it;
+            }else{
+              hits.push({poly:[[x0,y0],[x1,y0],[x1,y1],[x0,y1]],label:'можливо тут? ближче',color:'#ffd84d',main:false,t:now});
+              foundPart=it;
+            }
+            break;
           }
         }
       }
     }
-    if(foundMain){beep();showFound(foundMain)}
-    const dt=performance.now()-t0;fps=dt;
-    setInfo(`${target?'Шукаю '+esc(target.index):'Сканую'} · кадр ${Math.round(dt)} мс${zoom>1?' · наблизь індекс у рамку':''}`);
-    await new Promise(r=>setTimeout(r,30));
+    if(foundMain){beep();showFound(foundMain);partStreak=0}
+    else if(foundPart){partStreak++;if(partStreak>=2){beep();partStreak=0}}
+    else partStreak=0;
+    const vw=vid.videoWidth,vh=vid.videoHeight;
+    setInfo(`${target?'Шукаю '+esc(target.index):'Сканую'} · ${Math.round(performance.now()-t0)} мс · ${tiles.length} шм. · камера ${vw}×${vh}${hwZoom?' · зум ✓':''}`);
   }
 }
 
