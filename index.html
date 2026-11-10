@@ -264,10 +264,12 @@ addEventListener('resize',resize);
 // video px -> screen px (object-fit: cover)
 function vmap(){const vw=vid.videoWidth||1,vh=vid.videoHeight||1,W=ov.width,H=ov.height;const s=Math.max(W/vw,H/vh);return{s,ox:(W-vw*s)/2,oy:(H-vh*s)/2}}
 // crop region (in video px) used for recognition: center, sized by zoom, roughly the visible area
+function aimMode(){return mode==='ocr'&&!target}
 function cropRect(){
   const vw=vid.videoWidth,vh=vid.videoHeight,{s,ox,oy}=vmap();
   // visible part of video
   const vx0=Math.max(0,-ox/s),vy0=Math.max(0,-oy/s),vW=Math.min(vw,ov.width/s),vH=Math.min(vh,ov.height/s);
+  if(aimMode()){const w=vW*0.84/zoom,h=vH*0.22/zoom;return{x:vx0+(vW-w)/2,y:vy0+(vH-h)/2,w,h}} // рамка-приціл для розміщення
   const w=vW/zoom,h=vH/zoom;return{x:vx0+(vW-w)/2,y:vy0+(vH-h)/2,w,h};
 }
 function draw(){
@@ -275,7 +277,12 @@ function draw(){
   octx.clearRect(0,0,ov.width,ov.height);
   const {s,ox,oy}=vmap(),r=window.devicePixelRatio||1,now=performance.now();
   // zoom frame
-  if(zoom>1&&vid.videoWidth){const c=cropRect();octx.strokeStyle='#ffffff88';octx.lineWidth=2*r;octx.setLineDash([10*r,8*r]);octx.strokeRect(c.x*s+ox,c.y*s+oy,c.w*s,c.h*s);octx.setLineDash([])}
+  if(aimMode()&&vid.videoWidth){const c=cropRect(),X=c.x*s+ox,Y=c.y*s+oy,W=c.w*s,H=c.h*s,L=Math.min(W,H)*0.25;
+    octx.fillStyle='#0006';octx.fillRect(0,0,ov.width,Y);octx.fillRect(0,Y+H,ov.width,ov.height-Y-H);
+    octx.strokeStyle='#fff';octx.lineWidth=4*r;octx.beginPath();
+    [[X,Y,1,1],[X+W,Y,-1,1],[X,Y+H,1,-1],[X+W,Y+H,-1,-1]].forEach(([x,y,dx,dy])=>{octx.moveTo(x+dx*L,y);octx.lineTo(x,y);octx.lineTo(x,y+dy*L)});octx.stroke();
+    octx.font=`600 ${15*r}px -apple-system,sans-serif`;octx.fillStyle='#fff';octx.textAlign='center';octx.fillText('Наведи рамку на індекс',X+W/2,Y-12*r);octx.textAlign='left'}
+  else if(zoom>1&&vid.videoWidth){const c=cropRect();octx.strokeStyle='#ffffff88';octx.lineWidth=2*r;octx.setLineDash([10*r,8*r]);octx.strokeRect(c.x*s+ox,c.y*s+oy,c.w*s,c.h*s);octx.setLineDash([])}
   hits=hits.filter(h=>now-h.t<1600);
   for(const h of hits){
     const a=1-Math.max(0,(now-h.t-900)/700);
@@ -326,6 +333,7 @@ function matchToken(tok,idx){
   if(tok.length<3)return null;
   const hit=idx.get(tok);if(hit)return hit;
   if(tok.length>=6){for(const [k,it] of idx){if(Math.abs(k.length-tok.length)<=1&&lev(k,tok)<=1)return it}}
+  for(const [k,it] of idx){if(k.length>=4&&tok.length>k.length&&tok.includes(k))return it}
   return null;
 }
 async function ocrLoop(){
