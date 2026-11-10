@@ -345,25 +345,48 @@ async function setWhitelist(list){
   let wl;const onlyDigits=[...chars].every(c=>/[0-9\-./]/.test(c));
   wl=onlyDigits?'0123456789-./':'0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-./';
   if(wl===curWL)return;curWL=wl;
-  await Promise.all(workers.map(w=>w.setParameters({tessedit_pageseg_mode:'11',tessedit_char_whitelist:wl,user_defined_dpi:'300'})));
+  await Promise.all(workers.map(w=>w.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:wl,user_defined_dpi:'300'})));
 }
 function flattenWords(data){
   if(data.words&&data.words.length)return data.words;
   const out=[];(data.blocks||[]).forEach(b=>(b.paragraphs||[]).forEach(p=>(p.lines||[]).forEach(l=>(l.words||[]).forEach(w=>{w.line=l;out.push(w)}))));
   return out;
 }
-const tileCans=[];
-function tilesFor(c){
-  const T=560,ov=0.15; // розмір шматка в пікселях камери, перекриття
-  const cols=Math.max(1,Math.round(c.w/T)),rows=Math.max(1,Math.round(c.h/T));
-  const tw=c.w/cols,th=c.h/rows,out=[];
-  for(let r=0;r<rows;r++)for(let q=0;q<cols;q++){
-    const x=Math.max(c.x,c.x+q*tw-tw*ov/2),y=Math.max(c.y,c.y+r*th-th*ov/2);
-    const w=Math.min(c.x+c.w-x,tw*(1+ov)),h=Math.min(c.y+c.h-y,th*(1+ov));
-    out.push({x,y,w,h});
-  }
+// Знаходить горизонтальні рядки тексту (≥3 схожих символи поряд) на сірому зображенні.
+function detectCore(g,W,H){
+  const N=W*H,W1=W+1,I=new Float64Array(W1*(H+1));
+  for(let y=0;y<H;y++){let s=0;const r=y*W,o=(y+1)*W1,p=y*W1;for(let x=0;x<W;x++){s+=g[r+x];I[o+x+1]=I[p+x+1]+s}}
+  const R=15,C=15,bin=new Uint8Array(N);
+  for(let y=0;y<H;y++){const y0=y>R?y-R:0,y1=y+R+1<H?y+R+1:H,ro0=y0*W1,ro1=y1*W1,row=y*W;
+    for(let x=0;x<W;x++){const x0=x>R?x-R:0,x1=x+R+1<W?x+R+1:W,cnt=(x1-x0)*(y1-y0);
+      if(g[row+x]*cnt<=I[ro1+x1]-I[ro0+x1]-I[ro1+x0]+I[ro0+x0]-C*cnt)bin[row+x]=1}}
+  const lab=new Int32Array(N);let par=new Int32Array(1024),n=1;
+  const find=a=>{while(par[a]!==a){par[a]=par[par[a]];a=par[a]}return a};
+  const uni=(a,b)=>{a=find(a);b=find(b);if(a!==b)par[a<b?b:a]=a<b?a:b};
+  for(let y=0;y<H;y++){const row=y*W;for(let x=0;x<W;x++){const i=row+x;if(!bin[i])continue;
+    const a=x>0?lab[i-1]:0,b=(y>0&&x>0)?lab[i-W-1]:0,c=y>0?lab[i-W]:0,d=(y>0&&x<W-1)?lab[i-W+1]:0;
+    let m=a;if(b&&(!m||b<m))m=b;if(c&&(!m||c<m))m=c;if(d&&(!m||d<m))m=d;
+    if(!m){if(n>=par.length){const p2=new Int32Array(par.length*2);p2.set(par);par=p2}par[n]=n;m=n++}
+    lab[i]=m;if(a&&a!==m)uni(m,a);if(b&&b!==m)uni(m,b);if(c&&c!==m)uni(m,c);if(d&&d!==m)uni(m,d)}}
+  const mnx=new Int32Array(n).fill(1e9),mny=new Int32Array(n).fill(1e9),mxx=new Int32Array(n).fill(-1),mxy=new Int32Array(n).fill(-1),ar=new Int32Array(n);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){const l=lab[y*W+x];if(!l)continue;const r=find(l);ar[r]++;if(x<mnx[r])mnx[r]=x;if(x>mxx[r])mxx[r]=x;if(y<mny[r])mny[r]=y;if(y>mxy[r])mxy[r]=y}
+  const comps=[];
+  for(let r=1;r<n;r++){if(!ar[r]||par[r]!==r)continue;const w=mxx[r]-mnx[r]+1,h=mxy[r]-mny[r]+1;
+    if(h<6||h>W*0.25||w>h*1.6||w<h*0.12)continue;const f=ar[r]/(w*h);if(f<0.15||f>0.95)continue;
+    comps.push([mnx[r],mny[r],w,h])}
+  comps.sort((a,b)=>a[0]-b[0]);
+  const used=new Uint8Array(comps.length),out=[];
+  for(let i=0;i<comps.length;i++){if(used[i])continue;const grp=[comps[i]];used[i]=1;let L=comps[i];
+    for(let j=i+1;j<comps.length;j++){if(used[j])continue;const [x,y,w,h]=comps[j],[lx,ly,lw,lh]=L;
+      if(x>lx+lw+lh*0.9)break;
+      if(Math.abs(h-lh)<lh*0.25&&Math.abs((y+h)-(ly+lh))<lh*0.3&&x>=lx+lw*0.5){grp.push(comps[j]);used[j]=1;L=comps[j]}}
+    if(grp.length>=3){let x0=1e9,y0=1e9,x1=0,y1=0;for(const [x,y,w,h] of grp){x0=Math.min(x0,x);y0=Math.min(y0,y);x1=Math.max(x1,x+w);y1=Math.max(y1,y+h)}out.push({x0,y0,x1,y1,n:grp.length})}}
   return out;
 }
+
+const snapCan=document.createElement('canvas'),snapCtx=snapCan.getContext('2d',{willReadFrequently:true});
+const detCan=document.createElement('canvas'),detCtx=detCan.getContext('2d',{willReadFrequently:true});
+const lineCans=[];
 function buildIndex(){
   const m=new Map();(target?[target]:items).forEach(it=>{const k=key(it.index);if(k.length>=2)m.set(k,it)});return m;
 }
@@ -375,6 +398,7 @@ function matchToken(tok,idx){
     if(k.length>=6&&Math.abs(k.length-tok.length)<=1&&lev(k,tok)<=1)return[it,'full'];
     if(k.length>=9&&Math.abs(k.length-tok.length)<=2&&lev(k,tok)<=2)return[it,'full'];
   }
+  for(const [k,it] of idx){if(k.length>=4&&tok.length>k.length&&tok.includes(k))return[it,'full']}
   if(target){ // частковий збіг: прочиталась більша частина індексу
     for(const [k,it] of idx){if(tok.length>=Math.max(4,Math.ceil(k.length*0.6))&&k.includes(tok))return[it,'part']}
   }
@@ -388,49 +412,46 @@ async function ocrLoop(){
   while(running&&mode==='ocr'){
     if(!vid.videoWidth){await new Promise(r=>setTimeout(r,100));continue}
     const t0=performance.now();
-    const c=cropRect();const tiles=tilesFor(c);
-    const jobs=tiles.map((t,i)=>{
-      const cv=tileCans[i]||(tileCans[i]=document.createElement('canvas'));
-      const up=Math.min(2.2,1500/t.w); // збільшуємо шматок, щоб дрібні цифри стали читабельні
-      cv.width=Math.round(t.w*up);cv.height=Math.round(t.h*up);
-      const cx=cv.getContext('2d');cx.imageSmoothingQuality='high';cx.drawImage(vid,t.x,t.y,t.w,t.h,0,0,cv.width,cv.height);
-      return s.addJob('recognize',cv,{},{text:false,blocks:true}).then(r=>({t,up,data:r.data})).catch(()=>null);
+    // 1) знімок кадру в повній якості
+    const c=cropRect();snapCan.width=Math.round(c.w);snapCan.height=Math.round(c.h);
+    snapCtx.drawImage(vid,c.x,c.y,c.w,c.h,0,0,snapCan.width,snapCan.height);
+    // 2) швидко знаходимо рядки тексту (рівні літери поруч), логотипи й фон відкидаємо
+    const sc=Math.min(1,1080/snapCan.width),W=Math.round(snapCan.width*sc),H=Math.round(snapCan.height*sc);
+    detCan.width=W;detCan.height=H;detCtx.drawImage(snapCan,0,0,W,H);
+    const px=detCtx.getImageData(0,0,W,H).data,g=new Uint8Array(W*H);
+    for(let i=0,j=0;i<g.length;i++,j+=4)g[i]=(px[j]*77+px[j+1]*150+px[j+2]*29)>>8;
+    let lines=detectCore(g,W,H);
+    lines.sort((a,b)=>b.n-a.n);lines=lines.slice(0,24);
+    // 3) читаємо тільки ці рядки
+    const jobs=lines.map((L,i)=>{
+      const x0=L.x0/sc,y0=L.y0/sc,x1=L.x1/sc,y1=L.y1/sc,lh=y1-y0,p=lh*0.3;
+      const rx=Math.max(0,x0-p),ry=Math.max(0,y0-p),rw=Math.min(snapCan.width-rx,x1-x0+2*p),rh=Math.min(snapCan.height-ry,lh+2*p);
+      const k=Math.min(3,Math.max(0.5,40/lh));
+      const cv=lineCans[i]||(lineCans[i]=document.createElement('canvas'));
+      cv.width=Math.max(8,Math.round(rw*k));cv.height=Math.max(8,Math.round(rh*k));
+      const cx=cv.getContext('2d');cx.imageSmoothingQuality='high';cx.drawImage(snapCan,rx,ry,rw,rh,0,0,cv.width,cv.height);
+      return s.addJob('recognize',cv,{},{text:true}).then(r=>({box:[c.x+rx,c.y+ry,c.x+rx+rw,c.y+ry+rh],text:r.data.text||''})).catch(()=>null);
     });
     const res=(await Promise.all(jobs)).filter(Boolean);
     if(!running||mode!=='ocr')break;
     const now=performance.now();let foundMain=null,foundPart=null;const seen=new Set();
-    for(const {t,up,data} of res){
-      const words=flattenWords(data).filter(x=>x.confidence>30&&x.bbox&&x.text);
-      const lines=new Map();words.forEach(x=>{const L=x.line||x.paragraph||{};if(!lines.has(L))lines.set(L,[]);lines.get(L).push(x)});
-      for(const ws of lines.values()){
-        ws.sort((a,b)=>a.bbox.x0-b.bbox.x0);
-        for(let i=0;i<ws.length;i++){
-          let tok='',bb=null;
-          for(let j=i;j<Math.min(ws.length,i+3);j++){
-            tok+=key(ws[j].text);const b=ws[j].bbox;
-            bb=bb?{x0:Math.min(bb.x0,b.x0),y0:Math.min(bb.y0,b.y0),x1:Math.max(bb.x1,b.x1),y1:Math.max(bb.y1,b.y1)}:{...b};
-            const m=matchToken(tok,idx);if(!m)continue;
-            const [it,kind]=m;const sk=it.index+kind;if(seen.has(sk))break;seen.add(sk);
-            const pad=8,x0=t.x+(bb.x0-pad)/up,y0=t.y+(bb.y0-pad)/up,x1=t.x+(bb.x1+pad)/up,y1=t.y+(bb.y1+pad)/up;
-            if(kind==='full'){
-              hits.push({poly:[[x0,y0],[x1,y0],[x1,y1],[x0,y1]],label:target?'✓ '+(it.address||'ЗНАЙДЕНО'):(it.address||'—')+'  '+(it.name||'').slice(0,22),color:target?'#2ecc71':'#ffb020',main:!!target,t:now});
-              foundMain=foundMain||it;
-            }else{
-              hits.push({poly:[[x0,y0],[x1,y0],[x1,y1],[x0,y1]],label:'можливо тут? ближче',color:'#ffd84d',main:false,t:now});
-              foundPart=it;
-            }
-            break;
-          }
-        }
+    for(const {box,text} of res){
+      const cands=[key(text),...text.split(/\s+/).map(key)].filter(t=>t.length>=3);
+      for(const tok of cands){
+        const m=matchToken(tok,idx);if(!m)continue;
+        const [it,kind]=m;const sk=it.index+kind;if(seen.has(sk))break;seen.add(sk);
+        const [x0,y0,x1,y1]=box,poly=[[x0,y0],[x1,y0],[x1,y1],[x0,y1]];
+        if(kind==='full'){hits.push({poly,label:target?'✓ '+(it.address||'ЗНАЙДЕНО'):(it.address||'—')+'  '+(it.name||'').slice(0,22),color:target?'#2ecc71':'#ffb020',main:!!target,t:now});foundMain=foundMain||it}
+        else{hits.push({poly,label:'можливо тут? ближче',color:'#ffd84d',main:false,t:now});foundPart=it}
+        break;
       }
     }
     if(foundMain){beep();showFound(foundMain);partStreak=0}
     else if(foundPart){partStreak++;if(partStreak>=2){beep();partStreak=0}}
     else partStreak=0;
-    const vw=vid.videoWidth,vh=vid.videoHeight;
-    const dt=performance.now()-t0;
-    setInfo(`${target?'Шукаю '+esc(target.index):'Сканую'} · ${Math.round(dt)} мс · ${tiles.length} шм. · камера ${vw}×${vh}${hwZoom?' · опт. зум':''}`);
-    await new Promise(r=>setTimeout(r,Math.max(150,dt*0.35))); // пауза: телефон не перегрівається, камера не "милиться"
+    const dt=performance.now()-t0,vw=vid.videoWidth,vh=vid.videoHeight;
+    setInfo(`${target?'Шукаю '+esc(target.index):'Сканую'} · ${Math.round(dt)} мс · рядків ${lines.length} · камера ${vw}×${vh}${hwZoom?' · опт. зум':''}`);
+    await new Promise(r=>setTimeout(r,Math.max(120,dt*0.3)));
   }
 }
 
