@@ -72,6 +72,7 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:13p
     <input type="text" id="sIdx" placeholder="Введи індекс, напр. 120345" autocomplete="off" autocapitalize="characters" spellcheck="false" style="margin-top:10px;font-size:22px;font-family:ui-monospace,Menlo,monospace">
     <div id="sHint" class="mut" style="margin-top:6px;min-height:20px"></div>
     <button class="btn ac big" id="sGo" style="margin-top:8px">🎥 Шукати по індексу</button>
+    <div id="ocrState" class="mut" style="margin-top:6px;text-align:center">⏳ Готую розпізнавання…</div>
     <label class="btn big" style="margin-top:8px">🖼 Шукати за фото упаковки<input type="file" id="sPhoto" accept="image/*" class="hide"></label>
     <div class="mut" style="margin-top:8px">Фото можна зберегти з інтернету або зняти самому. Коли товар потрапить у кадр — він обведеться й телефон пискне.</div>
   </div>
@@ -116,6 +117,8 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:13p
     <b>Налаштування</b>
     <label class="row" style="margin-top:10px"><input type="checkbox" id="optBeep" checked> Пищати при знаходженні</label>
     <label class="row" style="margin-top:6px"><input type="checkbox" id="optLoose" checked> Пробачати схожі символи (O/0, I/1, S/5, B/8)</label>
+    <label class="row" style="margin-top:6px"><input type="checkbox" id="optHw"> Оптичний зум камери (може не фокусуватись зблизька)</label>
+    <label class="row" style="margin-top:6px"><input type="checkbox" id="optHi"> Камера 4K (чіткіше здалеку, але телефон гріється)</label>
     <div class="row" style="margin-top:12px"><button class="btn bad sm" id="clearAll">🗑 Очистити базу</button></div>
     <div class="mut" style="margin-top:10px">Підказка: додай сторінку на головний екран (Поділитися → «На початковий екран») — відкриватиметься як застосунок.</div>
   </div>
@@ -157,13 +160,15 @@ function confirmDlg(msg){return new Promise(r=>{const d=document.createElement('
 
 /* ================= storage ================= */
 let items=[]; // {index,name,address,ref?:dataURL}
-const opt={beep:true,loose:true};
+const opt={beep:true,loose:true,hwzoom:false,hires:false};
 function load(){try{items=JSON.parse(localStorage.getItem('scan_items')||'[]')}catch(e){items=[]}try{Object.assign(opt,JSON.parse(localStorage.getItem('scan_opt')||'{}'))}catch(e){}}
 function save(){try{localStorage.setItem('scan_items',JSON.stringify(items))}catch(e){toast('Пам\'ять переповнена — видали частину фото упаковок')}}
 function saveOpt(){try{localStorage.setItem('scan_opt',JSON.stringify(opt))}catch(e){}}
 load();$('#optBeep').checked=opt.beep;$('#optLoose').checked=opt.loose;
 $('#optBeep').onchange=e=>{opt.beep=e.target.checked;saveOpt()};
 $('#optLoose').onchange=e=>{opt.loose=e.target.checked;saveOpt()};
+$('#optHw').checked=opt.hwzoom;$('#optHw').onchange=e=>{opt.hwzoom=e.target.checked;saveOpt()};
+$('#optHi').checked=opt.hires;$('#optHi').onchange=e=>{opt.hires=e.target.checked;saveOpt()};
 
 function parseImport(txt){
   const out=[];
@@ -241,7 +246,7 @@ async function startCam(t,m){
   document.querySelectorAll('#modeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.m===mode));
   $('#found').classList.add('hide');
   $('#cam').classList.remove('hide');
-  const tries=[{width:{ideal:3840},height:{ideal:2160}},{width:{ideal:1920},height:{ideal:1080}},{}];
+  const tries=opt.hires?[{width:{ideal:3840},height:{ideal:2160},frameRate:{ideal:30}},{width:{ideal:1920},height:{ideal:1080}},{}]:[{width:{ideal:1920},height:{ideal:1080},frameRate:{ideal:30}},{}];
   stream=null;let lastErr=null;
   for(const t of tries){try{stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},...t}});break}catch(e){lastErr=e}}
   if(!stream){
@@ -261,10 +266,12 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)st
 let hwZoom=null,curZoomBtn=1;
 function setupZoom(){
   hwZoom=null;
-  try{const tr=stream.getVideoTracks()[0];const cap=tr.getCapabilities?tr.getCapabilities():{};if(cap.zoom&&cap.zoom.max>1)hwZoom={tr,min:cap.zoom.min||1,max:cap.zoom.max}}catch(e){}
+  try{const tr=stream.getVideoTracks()[0];const cap=tr.getCapabilities?tr.getCapabilities():{};
+    if(cap.focusMode&&cap.focusMode.includes('continuous'))tr.applyConstraints({advanced:[{focusMode:'continuous'}]}).catch(()=>{});
+    if(opt.hwzoom&&cap.zoom&&cap.zoom.max>1)hwZoom={tr,min:cap.zoom.min||1,max:cap.zoom.max}}catch(e){}
   const levels=hwZoom?[1,2,3,5,8].filter(z=>z<=hwZoom.max+0.01):[1,1.6,2.5];
   $('#zoom').innerHTML=levels.map(z=>`<button data-z="${z}">${z}×</button>`).join('');
-  const want=levels.includes(curZoomBtn)?curZoomBtn:1;applyZoom(want);
+  applyZoom(1);
 }
 async function applyZoom(z){
   curZoomBtn=z;document.querySelectorAll('#zoom button').forEach(x=>x.classList.toggle('on',+x.dataset.z===z));
@@ -319,15 +326,15 @@ function showFound(it){
 // Кілька паралельних "читачів" + кадр ріжеться на шматки, які збільшуються перед читанням:
 // так дрібний індекс видно здалеку, а кадри обробляються швидше.
 let workers=[],sched=null,schedP=null,curWL='';
-const NW=Math.max(2,Math.min(4,(navigator.hardwareConcurrency||4)-1));
+const NW=2;let loadPct=0,ocrReady=false;
 function getSched(){
   if(sched)return Promise.resolve(sched);
   if(schedP)return schedP;
   schedP=(async()=>{
     setInfo('<span class="spin"></span> Завантажую розпізнавання тексту (перший раз ~10–20 с)…');
     const s=Tesseract.createScheduler();
-    const ws=await Promise.all(Array.from({length:NW},()=>Tesseract.createWorker('eng',1)));
-    ws.forEach(w=>s.addWorker(w));workers=ws;sched=s;curWL='';return s;
+    const ws=await Promise.all(Array.from({length:NW},(_,i)=>Tesseract.createWorker('eng',1,{logger:m=>{if(i===0&&m.progress!=null&&!ocrReady){loadPct=Math.round(m.progress*100);const st=document.getElementById('ocrState');if(st)st.textContent=`⏳ Готую розпізнавання… ${loadPct}%`;if(running)setInfo(`<span class="spin"></span> Готую розпізнавання: ${esc(m.status||'')} ${loadPct}%`)}}})));
+    ws.forEach(w=>s.addWorker(w));workers=ws;sched=s;curWL='';ocrReady=true;return s;
   })();
   schedP.catch(()=>{schedP=null});
   return schedP;
@@ -421,7 +428,9 @@ async function ocrLoop(){
     else if(foundPart){partStreak++;if(partStreak>=2){beep();partStreak=0}}
     else partStreak=0;
     const vw=vid.videoWidth,vh=vid.videoHeight;
-    setInfo(`${target?'Шукаю '+esc(target.index):'Сканую'} · ${Math.round(performance.now()-t0)} мс · ${tiles.length} шм. · камера ${vw}×${vh}${hwZoom?' · зум ✓':''}`);
+    const dt=performance.now()-t0;
+    setInfo(`${target?'Шукаю '+esc(target.index):'Сканую'} · ${Math.round(dt)} мс · ${tiles.length} шм. · камера ${vw}×${vh}${hwZoom?' · опт. зум':''}`);
+    await new Promise(r=>setTimeout(r,Math.max(150,dt*0.35))); // пауза: телефон не перегрівається, камера не "милиться"
   }
 }
 
@@ -537,6 +546,7 @@ $('#pq').oninput=()=>{
 
 renderRecent();
 render();
+setTimeout(()=>{getSched().then(()=>{$('#ocrState').textContent='✅ Розпізнавання готове — камера бачитиме одразу'}).catch(()=>{$('#ocrState').textContent='⚠️ Не вдалося підготувати розпізнавання — перевір інтернет'})},800); // розпізнавання готується одразу, поки ти вводиш індекс
 if(location.protocol==='http:'&&location.hostname!=='localhost')toast('Відкрий через https, інакше камера не запрацює');
 </script>
 </body>
