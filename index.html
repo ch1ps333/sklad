@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<title>Склад · Live-сканер</title>
+<style>
+:root{--bg:#0f1115;--card:#1a1d24;--line:#2a2f3a;--tx:#eef1f6;--mut:#8b93a4;--ac:#ffb020;--ok:#2ecc71;--bad:#ff5c5c;--blue:#4da3ff}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+.hide{display:none!important}
+main{padding:12px 14px calc(env(safe-area-inset-bottom) + 40px);max-width:640px;margin:0 auto}
+.tabs{position:sticky;top:0;z-index:5;display:flex;background:var(--bg);border-bottom:1px solid var(--line);padding-top:env(safe-area-inset-top)}
+.tabs button{flex:1;background:none;border:0;color:var(--mut);padding:14px 4px;font-size:15px;font-weight:600;border-bottom:3px solid transparent}
+.tabs button.on{color:var(--tx);border-color:var(--ac)}
+section{display:none}section.on{display:block}
+.chip{font-family:ui-monospace,Menlo,monospace}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:#232833;color:var(--tx);border-radius:10px;padding:10px 14px;font-size:15px;font-weight:600}
+.btn.pri{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn.ac{background:var(--ac);border-color:var(--ac);color:#111}
+.btn.bad{color:var(--bad)}
+.btn.sm{padding:6px 10px;font-size:13px}
+.big{display:flex;justify-content:center;width:100%;padding:20px;font-size:19px;border-radius:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+input[type=text],input[type=search],textarea{width:100%;background:#0b0d11;color:var(--tx);border:1px solid var(--line);border-radius:10px;padding:12px;font-size:16px;font-family:inherit}
+textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:13px}
+.mut{color:var(--mut);font-size:14px}
+.it{display:grid;grid-template-columns:52px 1fr auto;gap:2px 10px;padding:10px 0;border-bottom:1px solid var(--line);align-items:center}
+.it:last-child{border:0}
+.it .ph{grid-row:1/3;width:52px;height:52px;border-radius:8px;background:#0b0d11 center/cover;border:1px dashed var(--line);display:flex;align-items:center;justify-content:center;font-size:20px;color:var(--mut)}
+.it .ph.has{border-style:solid}
+.it .n{font-weight:600;line-height:1.25}
+.it .i{font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--mut)}
+.it .a{grid-row:1/3;grid-column:3;font-weight:800;color:var(--ac);text-align:right}
+.it .go{grid-column:2/4;display:flex;gap:6px;margin-top:6px}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;font-weight:700;background:#2a2f3a;color:var(--mut)}
+/* camera */
+#cam{position:fixed;inset:0;background:#000;z-index:10}
+#cam video,#cam canvas{position:absolute;inset:0;width:100%;height:100%}
+#cam video{object-fit:cover}
+#topbar{position:absolute;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top) + 8px) 12px 10px;background:linear-gradient(#000c,#0000);display:flex;gap:8px;align-items:flex-start}
+#target{flex:1;font-weight:700;font-size:15px;text-shadow:0 1px 3px #000}
+#target small{display:block;font-weight:500;color:#ddd}
+#bottombar{position:absolute;left:0;right:0;bottom:0;padding:12px 12px calc(env(safe-area-inset-bottom) + 12px);background:linear-gradient(#0000,#000d)}
+#found{background:var(--ok);color:#06210f;border-radius:14px;padding:12px 14px;margin-bottom:10px;font-weight:700;text-align:center}
+#found .addr{font-size:34px;font-weight:900;line-height:1.1}
+#info{font-size:12px;color:#ccc;text-align:center;margin-bottom:8px;min-height:16px}
+.seg{display:flex;background:#0008;border-radius:10px;overflow:hidden;border:1px solid #fff3}
+.seg button{background:none;border:0;color:#fff;padding:9px 12px;font-weight:700;font-size:14px}
+.seg button.on{background:#fff;color:#000}
+.toast{position:fixed;left:50%;bottom:30px;transform:translateX(-50%);background:#000d;color:#fff;padding:10px 16px;border-radius:10px;font-size:14px;z-index:40;transition:opacity .3s;pointer-events:none}
+.dlg{position:fixed;inset:0;background:#000b;display:flex;align-items:center;justify-content:center;z-index:30;padding:20px}
+.dlg .card{max-width:400px;width:100%;max-height:85vh;overflow:auto}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #fff4;border-top-color:#fff;border-radius:50%;animation:s .8s linear infinite;vertical-align:-2px}
+@keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<nav class="tabs">
+  <button data-t="pSearch" class="on">🔍 Пошук</button>
+  <button data-t="pPlace">📦 Розміщення</button>
+  <button data-t="pBase">📋 База <span class="badge" id="cnt">0</span></button>
+</nav>
+<main>
+<!-- ===== ПОШУК ===== -->
+<section id="pSearch" class="on">
+  <div class="card">
+    <b>Що шукаємо на полиці?</b>
+    <input type="text" id="sIdx" placeholder="Введи індекс, напр. 120345" autocomplete="off" autocapitalize="characters" spellcheck="false" style="margin-top:10px;font-size:22px;font-family:ui-monospace,Menlo,monospace">
+    <div id="sHint" class="mut" style="margin-top:6px;min-height:20px"></div>
+    <button class="btn ac big" id="sGo" style="margin-top:8px">🎥 Шукати по індексу</button>
+    <label class="btn big" style="margin-top:8px">🖼 Шукати за фото упаковки<input type="file" id="sPhoto" accept="image/*" class="hide"></label>
+    <div class="mut" style="margin-top:8px">Фото можна зберегти з інтернету або зняти самому. Коли товар потрапить у кадр — він обведеться й телефон пискне.</div>
+  </div>
+  <div class="card" id="recentCard"><b>Нещодавні</b><div id="recent" class="row" style="margin-top:8px"></div></div>
+</section>
+
+<!-- ===== РОЗМІЩЕННЯ ===== -->
+<section id="pPlace">
+  <button class="btn ac big" id="startAll">🎥 Навести на коробку</button>
+  <div class="mut" style="margin:8px 2px 14px">Наводиш камеру на коробку — програма читає індекс, показує назву й адресу, куди ставити, і пищить. Працює по базі з вкладки «База».</div>
+  <div class="card">
+    <div class="mut" style="margin-bottom:6px">Або набери індекс вручну:</div>
+    <input type="search" id="pq" placeholder="Індекс або назва" autocomplete="off" autocapitalize="characters">
+    <div id="pres"></div>
+  </div>
+  <div class="card">
+    <b>Нові накладні</b>
+    <div class="mut" style="margin:6px 0 10px">Накладні розпізнає Claude, тому це робиться в програмі «Склад» у застосунку Claude. Там: «Накладні» → фото → «Зберегти», потім «База» → «📄 Копіювати як таблицю» → встав на вкладці «База» тут.</div>
+    <a class="btn pri" href="https://claude.ai/artifact/8H2hQMZpgjfw7rgD5m7hZw" target="_blank" rel="noopener">🧾 Відкрити «Склад» (накладні)</a>
+  </div>
+</section>
+
+<!-- ===== БАЗА ===== -->
+<section id="pBase">
+  <div class="card">
+    <div style="margin-bottom:8px"><b>Товари</b></div>
+    <input type="search" id="q" placeholder="Пошук: індекс, назва, адреса" autocomplete="off">
+    <div id="list"></div>
+  </div>
+
+  <div class="card">
+    <b>Завантажити базу</b>
+    <div class="mut" style="margin:6px 0 8px">В основній програмі «Склад» → вкладка «База» → «📄 Копіювати як таблицю», потім встав сюди. Або вручну: кожен рядок <code>індекс ; назва ; адреса</code>.</div>
+    <textarea id="imp" placeholder="Індекс&#9;Назва&#9;Адреса"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn pri" id="doImp">⬇️ Додати / оновити</button>
+      <button class="btn" id="doRep">Замінити всю базу</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <b>Налаштування</b>
+    <label class="row" style="margin-top:10px"><input type="checkbox" id="optBeep" checked> Пищати при знаходженні</label>
+    <label class="row" style="margin-top:6px"><input type="checkbox" id="optLoose" checked> Пробачати схожі символи (O/0, I/1, S/5, B/8)</label>
+    <div class="row" style="margin-top:12px"><button class="btn bad sm" id="clearAll">🗑 Очистити базу</button></div>
+    <div class="mut" style="margin-top:10px">Підказка: додай сторінку на головний екран (Поділитися → «На початковий екран») — відкриватиметься як застосунок.</div>
+  </div>
+</section>
+</main>
+
+<div id="cam" class="hide">
+  <video id="vid" playsinline muted autoplay></video>
+  <canvas id="ov"></canvas>
+  <div id="topbar">
+    <div id="target"></div>
+    <button class="btn sm" id="stop">✕ Закрити</button>
+  </div>
+  <div id="bottombar">
+    <div id="found" class="hide"></div>
+    <div id="info"></div>
+    <div class="row" style="justify-content:space-between">
+      <div class="seg" id="zoom"><button data-z="1" class="on">1×</button><button data-z="1.6">1.6×</button><button data-z="2.5">2.5×</button></div>
+      <div class="seg" id="modeSeg"><button data-m="ocr" class="on">Індекс</button><button data-m="img">Фото</button></div>
+    </div>
+  </div>
+</div>
+
+<input type="file" id="refIn" accept="image/*" class="hide">
+
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script>
+/* ================= helpers ================= */
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const CYR={'А':'A','В':'B','Е':'E','К':'K','М':'M','Н':'H','О':'O','Р':'P','С':'C','Т':'T','Х':'X','І':'I','У':'Y','Ї':'I'};
+function norm(s){return String(s??'').toUpperCase().replace(/[А-ЯІЇЄҐ]/g,c=>CYR[c]||c).replace(/[^A-Z0-9А-ЯІЇЄҐ]/g,'')}
+const LOOSE={O:'0',Q:'0',D:'0',I:'1',L:'1',T:'1',S:'5',B:'8',Z:'2',G:'6'};
+function loose(s){return s.replace(/[OQDILTSBZG]/g,c=>LOOSE[c])}
+function key(s){const n=norm(s);return opt.loose?loose(n):n}
+function lev(a,b){if(Math.abs(a.length-b.length)>1)return 9;let p=[...Array(b.length+1).keys()];for(let i=1;i<=a.length;i++){const c=[i];for(let j=1;j<=b.length;j++)c[j]=Math.min(p[j]+1,c[j-1]+1,p[j-1]+(a[i-1]===b[j-1]?0:1));p=c}return p[b.length]}
+let tT;function toast(m){let t=$('#toast');if(!t){t=document.createElement('div');t.id='toast';t.className='toast';document.body.appendChild(t)}t.textContent=m;t.style.opacity=1;clearTimeout(tT);tT=setTimeout(()=>t.style.opacity=0,2400)}
+function confirmDlg(msg){return new Promise(r=>{const d=document.createElement('div');d.className='dlg';d.innerHTML=`<div class="card"><div style="margin-bottom:14px">${esc(msg)}</div><div class="row" style="justify-content:flex-end"><button class="btn" data-v="0">Ні</button><button class="btn bad" data-v="1">Так</button></div></div>`;d.onclick=e=>{const v=e.target.dataset.v;if(v!==undefined){d.remove();r(v==='1')}};document.body.appendChild(d)})}
+
+/* ================= storage ================= */
+let items=[]; // {index,name,address,ref?:dataURL}
+const opt={beep:true,loose:true};
+function load(){try{items=JSON.parse(localStorage.getItem('scan_items')||'[]')}catch(e){items=[]}try{Object.assign(opt,JSON.parse(localStorage.getItem('scan_opt')||'{}'))}catch(e){}}
+function save(){try{localStorage.setItem('scan_items',JSON.stringify(items))}catch(e){toast('Пам\'ять переповнена — видали частину фото упаковок')}}
+function saveOpt(){try{localStorage.setItem('scan_opt',JSON.stringify(opt))}catch(e){}}
+load();$('#optBeep').checked=opt.beep;$('#optLoose').checked=opt.loose;
+$('#optBeep').onchange=e=>{opt.beep=e.target.checked;saveOpt()};
+$('#optLoose').onchange=e=>{opt.loose=e.target.checked;saveOpt()};
+
+function parseImport(txt){
+  const out=[];
+  txt.split(/\r?\n/).forEach(line=>{
+    if(!line.trim())return;
+    let p=line.includes('\t')?line.split('\t'):line.includes(';')?line.split(';'):line.split(',');
+    p=p.map(x=>x.trim());
+    if(!p[0]||/^(індекс|индекс|index|код)$/i.test(p[0]))return;
+    if(/^так$/i.test(p[4]||'')){} // done flag ignored
+    out.push({index:p[0],name:p[1]||'',address:p[2]||''});
+  });
+  return out;
+}
+function merge(list,replace){
+  const map=new Map(replace?[]:items.map(i=>[norm(i.index),i]));
+  list.forEach(n=>{const k=norm(n.index);const o=map.get(k);map.set(k,{...(o||{}),...n,name:n.name||o?.name||'',address:n.address||o?.address||'',ref:o?.ref})});
+  if(replace)items.forEach(o=>{const m=map.get(norm(o.index));if(m&&o.ref)m.ref=o.ref});
+  items=[...map.values()];save();render();
+}
+$('#doImp').onclick=()=>{const l=parseImport($('#imp').value);if(!l.length)return toast('Не знайшов рядків');merge(l,false);$('#imp').value='';toast('Додано/оновлено: '+l.length)};
+$('#doRep').onclick=async()=>{const l=parseImport($('#imp').value);if(!l.length)return toast('Не знайшов рядків');if(!await confirmDlg(`Замінити базу на ${l.length} товарів? Фото упаковок для тих самих індексів збережуться.`))return;merge(l,true);$('#imp').value='';toast('Базу замінено')};
+$('#clearAll').onclick=async()=>{if(!await confirmDlg('Видалити всю базу разом із фото упаковок?'))return;items=[];save();render()};
+
+/* ================= list ================= */
+function render(){
+  $('#cnt').textContent=items.length;
+  const q=$('#q').value.trim(),nq=norm(q),lq=q.toLowerCase();
+  const f=items.map((it,i)=>[it,i]).filter(([it])=>!q||norm(it.index).includes(nq)||(it.name||'').toLowerCase().includes(lq)||norm(it.address).includes(nq))
+    .sort((a,b)=>(a[0].address||'').localeCompare(b[0].address||'','uk',{numeric:true}));
+  $('#list').innerHTML=f.length?f.slice(0,300).map(([it,i])=>`<div class="it">
+    <div class="ph ${it.ref?'has':''}" data-ref="${i}" style="${it.ref?`background-image:url(${it.ref})`:''}">${it.ref?'':'＋'}</div>
+    <div class="n">${esc(it.name||'(без назви)')}</div><div class="a">${esc(it.address||'—')}</div>
+    <div class="i">${esc(it.index)}</div>
+    <div class="go"><button class="btn sm pri" data-find="${i}">🔍 Шукати</button>${it.ref?`<button class="btn sm" data-findimg="${i}">🖼 За фото</button><button class="btn sm bad" data-delref="${i}">✕ фото</button>`:''}</div>
+  </div>`).join(''):'<div class="mut" style="padding:12px 0">Порожньо. Встав базу нижче.</div>';
+}
+$('#q').oninput=render;
+let refFor=-1;
+$('#list').onclick=e=>{
+  const t=e.target.closest('[data-ref],[data-find],[data-findimg],[data-delref]');if(!t)return;
+  if(t.dataset.ref!==undefined){refFor=+t.dataset.ref;$('#refIn').click()}
+  else if(t.dataset.find!==undefined)startCam(items[+t.dataset.find],'ocr');
+  else if(t.dataset.findimg!==undefined)startCam(items[+t.dataset.findimg],'img');
+  else if(t.dataset.delref!==undefined){delete items[+t.dataset.delref].ref;save();render()}
+};
+$('#refIn').onchange=async e=>{
+  const f=e.target.files[0];e.target.value='';if(!f||refFor<0)return;
+  const img=await new Promise((r,j)=>{const i=new Image();i.onload=()=>r(i);i.onerror=j;i.src=URL.createObjectURL(f)});
+  const k=Math.min(1,480/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=img.width*k|0;c.height=img.height*k|0;c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  items[refFor].ref=c.toDataURL('image/jpeg',.82);save();render();toast('Фото упаковки збережено');
+};
+
+/* ================= audio ================= */
+let actx=null,lastBeep=0;
+function unlockAudio(){try{actx=actx||new (window.AudioContext||window.webkitAudioContext)();actx.resume();const o=actx.createOscillator(),g=actx.createGain();g.gain.value=0.0001;o.connect(g).connect(actx.destination);o.start();o.stop(actx.currentTime+.01)}catch(e){}}
+function beep(){
+  if(!opt.beep||!actx)return;const now=performance.now();if(now-lastBeep<900)return;lastBeep=now;
+  try{[0,.14].forEach(dt=>{const o=actx.createOscillator(),g=actx.createGain();o.type='square';o.frequency.value=1760;g.gain.setValueAtTime(.25,actx.currentTime+dt);g.gain.exponentialRampToValueAtTime(.001,actx.currentTime+dt+.11);o.connect(g).connect(actx.destination);o.start(actx.currentTime+dt);o.stop(actx.currentTime+dt+.12)})}catch(e){}
+  try{navigator.vibrate&&navigator.vibrate(120)}catch(e){}
+}
+
+/* ================= camera ================= */
+const vid=$('#vid'),ov=$('#ov'),octx=ov.getContext('2d');
+let stream=null,running=false,target=null,mode='ocr',zoom=1,wakeLock=null;
+let hits=[]; // {poly:[[x,y]..] in video px, label, color, t}
+function setInfo(h){$('#info').innerHTML=h}
+
+async function startCam(t,m){
+  if(!t&&!items.length)return toast('Спочатку завантаж базу');
+  if(m==='img'&&!(t&&t.ref))return toast('Для пошуку за фото додай фото упаковки (＋ біля товару)');
+  unlockAudio();
+  target=t||null;mode=m||'ocr';hits=[];
+  $('#target').innerHTML=target?`🔍 ${esc(target.name||target.index||'Упаковка з фото')}<small>${esc(target.index||'')}${target.address?' → '+esc(target.address):''}</small>`:`📦 Розміщення<small>${items.length} товарів у базі</small>`;
+  $('#modeSeg').classList.toggle('hide',!(target&&target.ref&&target.index));
+  document.querySelectorAll('#modeSeg button').forEach(b=>b.classList.toggle('on',b.dataset.m===mode));
+  $('#found').classList.add('hide');
+  $('#cam').classList.remove('hide');
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:1920},height:{ideal:1080}}});
+  }catch(e){
+    $('#cam').classList.add('hide');
+    toast(location.protocol!=='https:'?'Камера працює лише через https-посилання':'Немає доступу до камери: Налаштування → Safari → Камера → Дозволити');return;
+  }
+  vid.srcObject=stream;await vid.play().catch(()=>{});
+  try{wakeLock=await navigator.wakeLock?.request('screen')}catch(e){}
+  running=true;resize();requestAnimationFrame(draw);
+  if(mode==='ocr')ocrLoop();else imgLoop();
+}
+function stopCam(){running=false;stream&&stream.getTracks().forEach(t=>t.stop());stream=null;$('#cam').classList.add('hide');try{wakeLock&&wakeLock.release()}catch(e){};wakeLock=null}
+$('#stop').onclick=stopCam;
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)stopCam()});
+$('#zoom').onclick=e=>{const b=e.target.closest('button');if(!b)return;zoom=+b.dataset.z;document.querySelectorAll('#zoom button').forEach(x=>x.classList.toggle('on',x===b))};
+$('#modeSeg').onclick=e=>{const b=e.target.closest('button');if(!b||b.dataset.m===mode)return;const t=target;stopCam();startCam(t,b.dataset.m)};
+$('#startAll').onclick=()=>startCam(null,'ocr');
+
+function resize(){const r=window.devicePixelRatio||1;ov.width=innerWidth*r;ov.height=innerHeight*r}
+addEventListener('resize',resize);
+// video px -> screen px (object-fit: cover)
+function vmap(){const vw=vid.videoWidth||1,vh=vid.videoHeight||1,W=ov.width,H=ov.height;const s=Math.max(W/vw,H/vh);return{s,ox:(W-vw*s)/2,oy:(H-vh*s)/2}}
+// crop region (in video px) used for recognition: center, sized by zoom, roughly the visible area
+function cropRect(){
+  const vw=vid.videoWidth,vh=vid.videoHeight,{s,ox,oy}=vmap();
+  // visible part of video
+  const vx0=Math.max(0,-ox/s),vy0=Math.max(0,-oy/s),vW=Math.min(vw,ov.width/s),vH=Math.min(vh,ov.height/s);
+  const w=vW/zoom,h=vH/zoom;return{x:vx0+(vW-w)/2,y:vy0+(vH-h)/2,w,h};
+}
+function draw(){
+  if(!running)return;
+  octx.clearRect(0,0,ov.width,ov.height);
+  const {s,ox,oy}=vmap(),r=window.devicePixelRatio||1,now=performance.now();
+  // zoom frame
+  if(zoom>1&&vid.videoWidth){const c=cropRect();octx.strokeStyle='#ffffff88';octx.lineWidth=2*r;octx.setLineDash([10*r,8*r]);octx.strokeRect(c.x*s+ox,c.y*s+oy,c.w*s,c.h*s);octx.setLineDash([])}
+  hits=hits.filter(h=>now-h.t<1600);
+  for(const h of hits){
+    const a=1-Math.max(0,(now-h.t-900)/700);
+    octx.globalAlpha=a;octx.strokeStyle=h.color;octx.lineWidth=(h.main?6:4)*r;octx.lineJoin='round';
+    octx.beginPath();h.poly.forEach(([x,y],i)=>{const X=x*s+ox,Y=y*s+oy;i?octx.lineTo(X,Y):octx.moveTo(X,Y)});octx.closePath();octx.stroke();
+    if(h.main){octx.fillStyle=h.color+'33';octx.fill()}
+    if(h.label){
+      const X=Math.min(...h.poly.map(p=>p[0]))*s+ox,Y=Math.min(...h.poly.map(p=>p[1]))*s+oy;
+      octx.font=`800 ${(h.main?22:16)*r}px -apple-system,sans-serif`;const tw=octx.measureText(h.label).width;
+      const bh=(h.main?30:22)*r,by=Math.max(0,Y-bh-4*r);
+      octx.fillStyle=h.color;octx.fillRect(X-3*r,by,tw+12*r,bh);
+      octx.fillStyle='#000';octx.fillText(h.label,X+3*r,by+bh-8*r);
+    }
+    octx.globalAlpha=1;
+  }
+  requestAnimationFrame(draw);
+}
+function showFound(it){
+  const f=$('#found');f.classList.remove('hide');
+  f.innerHTML=it.address?`<div class="addr">${esc(it.address)}</div><div>${esc(it.name||'')} · ${esc(it.index)}</div>`:`<div class="addr">✓ ЗНАЙДЕНО</div><div>${esc(it.name||it.index||'')}</div>`;
+  clearTimeout(showFound.t);showFound.t=setTimeout(()=>f.classList.add('hide'),4000);
+}
+
+/* ================= OCR mode ================= */
+let worker=null,workerP=null;
+function getWorker(){
+  if(worker)return Promise.resolve(worker);
+  if(workerP)return workerP;
+  workerP=(async()=>{
+    setInfo('<span class="spin"></span> Завантажую розпізнавання тексту (перший раз ~10 с)…');
+    const w=await Tesseract.createWorker('eng',1);
+    await w.setParameters({tessedit_pageseg_mode:'11',tessedit_char_whitelist:'0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ-./'});
+    worker=w;return w;
+  })();
+  workerP.catch(()=>{workerP=null});
+  return workerP;
+}
+function flattenWords(data){
+  if(data.words&&data.words.length)return data.words;
+  const out=[];(data.blocks||[]).forEach(b=>(b.paragraphs||[]).forEach(p=>(p.lines||[]).forEach(l=>(l.words||[]).forEach(w=>{w.line=l;out.push(w)}))));
+  return out;
+}
+const ocrCan=document.createElement('canvas'),ocrCtx=ocrCan.getContext('2d',{willReadFrequently:true});
+function buildIndex(){
+  const m=new Map();(target?[target]:items).forEach(it=>{const k=key(it.index);if(k.length>=2)m.set(k,it)});return m;
+}
+function matchToken(tok,idx){
+  if(tok.length<3)return null;
+  const hit=idx.get(tok);if(hit)return hit;
+  if(tok.length>=6){for(const [k,it] of idx){if(Math.abs(k.length-tok.length)<=1&&lev(k,tok)<=1)return it}}
+  return null;
+}
+async function ocrLoop(){
+  let w;try{w=await getWorker()}catch(e){setInfo('❌ Не вдалося завантажити розпізнавання. Перевір інтернет.');return}
+  setInfo(target?'Наводь камеру на полицю — шукаю індекс':'Наводь камеру на коробки');
+  const idx=buildIndex();let fps=0;
+  while(running&&mode==='ocr'){
+    if(!vid.videoWidth){await new Promise(r=>setTimeout(r,100));continue}
+    const t0=performance.now();
+    const c=cropRect();const OW=1100;const sc=OW/c.w;
+    ocrCan.width=OW;ocrCan.height=Math.round(c.h*sc);
+    ocrCtx.filter='grayscale(1) contrast(1.4)';
+    ocrCtx.drawImage(vid,c.x,c.y,c.w,c.h,0,0,ocrCan.width,ocrCan.height);
+    let data;try{({data}=await w.recognize(ocrCan,{},{text:true,blocks:true}))}catch(e){await new Promise(r=>setTimeout(r,300));continue}
+    if(!running||mode!=='ocr')break;
+    const words=flattenWords(data).filter(x=>x.confidence>35&&x.bbox);
+    // group by line for joining split indexes ("12 345-67")
+    const lines=new Map();words.forEach(x=>{const L=x.line||x.paragraph||{};if(!lines.has(L))lines.set(L,[]);lines.get(L).push(x)});
+    const now=performance.now();let foundMain=null;const seen=new Set();
+    for(const ws of lines.values()){
+      ws.sort((a,b)=>a.bbox.x0-b.bbox.x0);
+      for(let i=0;i<ws.length;i++){
+        let tok='';let bb=null;
+        for(let j=i;j<Math.min(ws.length,i+3);j++){
+          tok+=key(ws[j].text);const b=ws[j].bbox;
+          bb=bb?{x0:Math.min(bb.x0,b.x0),y0:Math.min(bb.y0,b.y0),x1:Math.max(bb.x1,b.x1),y1:Math.max(bb.y1,b.y1)}:{...b};
+          const it=matchToken(tok,idx);
+          if(it&&!seen.has(it)){
+            seen.add(it);
+            const pad=6,x0=c.x+(bb.x0-pad)/sc,y0=c.y+(bb.y0-pad)/sc,x1=c.x+(bb.x1+pad)/sc,y1=c.y+(bb.y1+pad)/sc;
+            const main=!!target;
+            hits.push({poly:[[x0,y0],[x1,y0],[x1,y1],[x0,y1]],label:target?'✓ '+(it.address||'ЗНАЙДЕНО'):(it.address||'—')+'  '+(it.name||'').slice(0,22),color:main?'#2ecc71':'#ffb020',main,t:now});
+            foundMain=foundMain||it;break;
+          }
+        }
+      }
+    }
+    if(foundMain){beep();showFound(foundMain)}
+    const dt=performance.now()-t0;fps=dt;
+    setInfo(`${target?'Шукаю '+esc(target.index):'Сканую'} · кадр ${Math.round(dt)} мс${zoom>1?' · наблизь індекс у рамку':''}`);
+    await new Promise(r=>setTimeout(r,30));
+  }
+}
+
+/* ================= Image (packaging) mode — OpenCV ORB ================= */
+let cvP=null;
+function loadCV(){
+  if(cvP)return cvP;
+  cvP=new Promise((res,rej)=>{
+    const s=document.createElement('script');s.async=true;
+    s.src='https://docs.opencv.org/4.10.0/opencv.js';
+    s.onload=async()=>{try{let c=window.cv;if(c&&typeof c.then==='function')c=await c;if(c&&c.Mat){window.cv=c;return res(c)}c.onRuntimeInitialized=()=>res(c)}catch(e){rej(e)}};
+    s.onerror=()=>{cvP=null;rej(new Error('cv'))};
+    document.head.appendChild(s);
+  });
+  return cvP;
+}
+const frCan=document.createElement('canvas'),frCtx=frCan.getContext('2d',{willReadFrequently:true});
+async function imgLoop(){
+  setInfo('<span class="spin"></span> Завантажую порівняння фото (перший раз ~10–20 с)…');
+  let cv;try{cv=await loadCV()}catch(e){setInfo('❌ Не вдалося завантажити модуль фото. Перевір інтернет.');return}
+  if(!running||mode!=='img')return;
+  // reference
+  const refImg=await new Promise(r=>{const i=new Image();i.onload=()=>r(i);i.src=target.ref});
+  const rc=document.createElement('canvas');rc.width=refImg.width;rc.height=refImg.height;rc.getContext('2d').drawImage(refImg,0,0);
+  const orb=new cv.ORB(1200);
+  const rMat=cv.imread(rc),rGray=new cv.Mat();cv.cvtColor(rMat,rGray,cv.COLOR_RGBA2GRAY);
+  const rKp=new cv.KeyPointVector(),rDes=new cv.Mat(),none=new cv.Mat();
+  orb.detectAndCompute(rGray,none,rKp,rDes);
+  rMat.delete();rGray.delete();
+  if(rKp.size()<15){setInfo('⚠️ На фото упаковки замало деталей. Спробуй чіткіше фото лицьової сторони.');}
+  const bf=new cv.BFMatcher(cv.NORM_HAMMING,false);
+  setInfo('Наводь камеру на полицю — шукаю упаковку');
+  let streak=0;
+  while(running&&mode==='img'){
+    if(!vid.videoWidth){await new Promise(r=>setTimeout(r,100));continue}
+    const t0=performance.now();
+    const c=cropRect();const FW=640,sc=FW/c.w;frCan.width=FW;frCan.height=Math.round(c.h*sc);
+    frCtx.drawImage(vid,c.x,c.y,c.w,c.h,0,0,frCan.width,frCan.height);
+    const fMat=cv.imread(frCan),fGray=new cv.Mat();cv.cvtColor(fMat,fGray,cv.COLOR_RGBA2GRAY);fMat.delete();
+    const fKp=new cv.KeyPointVector(),fDes=new cv.Mat();
+    orb.detectAndCompute(fGray,none,fKp,fDes);fGray.delete();
+    let poly=null,inl=0;
+    if(fDes.rows>10&&rDes.rows>10){
+      const mm=new cv.DMatchVectorVector();bf.knnMatch(rDes,fDes,mm,2);
+      const src=[],dst=[];
+      for(let i=0;i<mm.size();i++){const m=mm.get(i);if(m.size()<2)continue;const a=m.get(0),b=m.get(1);if(a.distance<0.75*b.distance){const p=rKp.get(a.queryIdx).pt,q=fKp.get(a.trainIdx).pt;src.push(p.x,p.y);dst.push(q.x,q.y)}}
+      mm.delete();
+      if(src.length/2>=12){
+        const sM=cv.matFromArray(src.length/2,1,cv.CV_32FC2,src),dM=cv.matFromArray(dst.length/2,1,cv.CV_32FC2,dst),mask=new cv.Mat();
+        const H=cv.findHomography(sM,dM,cv.RANSAC,5,mask);
+        if(H&&!H.empty()){
+          for(let i=0;i<mask.rows;i++)if(mask.data[i])inl++;
+          if(inl>=12){
+            const W=refImg.width,Hh=refImg.height;
+            const cs=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,W,0,W,Hh,0,Hh]),cd=new cv.Mat();
+            cv.perspectiveTransform(cs,cd,H);
+            const pts=[];for(let i=0;i<4;i++)pts.push([cd.data32F[i*2],cd.data32F[i*2+1]]);
+            cs.delete();cd.delete();
+            if(sanePoly(pts,frCan.width,frCan.height))poly=pts.map(([x,y])=>[c.x+x/sc,c.y+y/sc]);
+          }
+        }
+        H&&H.delete();sM.delete();dM.delete();mask.delete();
+      }
+    }
+    fKp.delete();fDes.delete();
+    if(poly){streak++;if(streak>=2){hits=[{poly,label:'✓ '+(target.address||'ЗНАЙДЕНО'),color:'#2ecc71',main:true,t:performance.now()}];beep();showFound(target)}}
+    else streak=0;
+    setInfo(`Шукаю упаковку · збігів ${inl} · кадр ${Math.round(performance.now()-t0)} мс`);
+    await new Promise(r=>setTimeout(r,20));
+  }
+  try{orb.delete();bf.delete();rKp.delete();rDes.delete();none.delete()}catch(e){}
+}
+function sanePoly(p,W,H){
+  // convex, not tiny, not crazy-big
+  let sign=0;for(let i=0;i<4;i++){const a=p[i],b=p[(i+1)%4],c=p[(i+2)%4];const cr=(b[0]-a[0])*(c[1]-b[1])-(b[1]-a[1])*(c[0]-b[0]);const s=Math.sign(cr);if(!s)return false;if(sign&&s!==sign)return false;sign=s}
+  let area=0;for(let i=0;i<4;i++){const a=p[i],b=p[(i+1)%4];area+=a[0]*b[1]-b[0]*a[1]}area=Math.abs(area)/2;
+  return area>W*H*0.004&&area<W*H*4&&p.every(([x,y])=>x>-W&&x<2*W&&y>-H&&y<2*H);
+}
+
+/* ================= tabs ================= */
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('main section').forEach(s=>s.classList.toggle('on',s.id===b.dataset.t));
+  try{localStorage.setItem('scan_tab',b.dataset.t)}catch(e){}
+});
+try{const t=localStorage.getItem('scan_tab');t&&document.querySelector(`.tabs button[data-t="${t}"]`)?.click()}catch(e){}
+
+/* ================= ПОШУК (без бази) ================= */
+function baseFor(idx){const k=norm(idx);return k?items.find(i=>norm(i.index)===k):null}
+function sTarget(){const v=$('#sIdx').value.trim();const b=baseFor(v);return b?{...b}:{index:v,name:'',address:''}}
+$('#sIdx').oninput=()=>{const v=$('#sIdx').value.trim();const b=baseFor(v);$('#sHint').innerHTML=b?`У базі: <b>${esc(b.name)}</b> → <b style="color:var(--ac)">${esc(b.address||'—')}</b>`:(v&&norm(v).length<3?'Мінімум 3 символи':'')};
+$('#sIdx').onkeydown=e=>{if(e.key==='Enter'){e.preventDefault();$('#sGo').click()}};
+function recentGet(){try{return JSON.parse(localStorage.getItem('scan_recent')||'[]')}catch(e){return[]}}
+function recentAdd(v){if(!v)return;const r=[v,...recentGet().filter(x=>norm(x)!==norm(v))].slice(0,8);try{localStorage.setItem('scan_recent',JSON.stringify(r))}catch(e){}renderRecent()}
+function renderRecent(){const r=recentGet();$('#recentCard').classList.toggle('hide',!r.length);$('#recent').innerHTML=r.map(x=>`<button class="btn sm chip" data-r="${esc(x)}">${esc(x)}</button>`).join('')}
+$('#recent').onclick=e=>{const b=e.target.closest('[data-r]');if(b){$('#sIdx').value=b.dataset.r;$('#sIdx').oninput()}};
+$('#sGo').onclick=()=>{const t=sTarget();if(norm(t.index).length<3){toast('Введи індекс (мінімум 3 символи)');$('#sIdx').focus();return}recentAdd(t.index);$('#sIdx').blur();startCam(t,'ocr')};
+$('#sPhoto').onchange=async e=>{
+  const f=e.target.files[0];e.target.value='';if(!f)return;
+  const img=await new Promise((r,j)=>{const i=new Image();i.onload=()=>r(i);i.onerror=j;i.src=URL.createObjectURL(f)});
+  const k=Math.min(1,480/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=img.width*k|0;c.height=img.height*k|0;c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  const t=sTarget();t.ref=c.toDataURL('image/jpeg',.82);if(t.index)recentAdd(t.index);
+  startCam(t,'img');
+};
+
+/* ================= РОЗМІЩЕННЯ: ручний пошук ================= */
+$('#pq').oninput=()=>{
+  const q=$('#pq').value.trim(),nq=norm(q),lq=q.toLowerCase();
+  if(!q){$('#pres').innerHTML='';return}
+  const f=items.filter(it=>norm(it.index).includes(nq)||(it.name||'').toLowerCase().includes(lq)).slice(0,20);
+  $('#pres').innerHTML=f.length?f.map(it=>`<div class="it" style="grid-template-columns:1fr auto"><div class="n">${esc(it.name||'(без назви)')}</div><div class="a" style="grid-column:2;font-size:22px">${esc(it.address||'—')}</div><div class="i">${esc(it.index)}</div></div>`).join(''):'<div class="mut" style="padding:10px 0">Немає в базі</div>';
+};
+
+renderRecent();
+render();
+if(location.protocol==='http:'&&location.hostname!=='localhost')toast('Відкрий через https, інакше камера не запрацює');
+</script>
+</body>
+</html>
