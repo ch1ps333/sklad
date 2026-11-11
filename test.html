@@ -90,7 +90,7 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:13p
   </div>
   <div class="card">
     <b>Нові накладні</b>
-    <div class="mut" style="margin:6px 0 10px">Накладні розпізнає Claude, тому це робиться в програмі «Склад» у застосунку Claude. Там: «Накладні» → фото → «Зберегти», потім «База» → «📄 Копіювати як таблицю» → встав на вкладці «База» тут.</div>
+    <div class="mut" style="margin:6px 0 10px">Накладні розпізнає Claude у програмі «Склад». Додай там накладні, потім натисни в ній «🎥 Відкрити сканер з базою» — сканер відкриється вже з оновленою базою.</div>
     <a class="btn pri" href="https://claude.ai/artifact/8H2hQMZpgjfw7rgD5m7hZw" target="_blank" rel="noopener">🧾 Відкрити «Склад» (накладні)</a>
   </div>
 </section>
@@ -567,6 +567,22 @@ $('#pq').oninput=()=>{
 
 renderRecent();
 render();
+/* ================= Імпорт бази з програми «Склад» через посилання ================= */
+async function importFromHash(){
+  const m=location.hash.match(/^#d=([zj])(.+)$/);if(!m)return;
+  try{
+    let s=m[2].replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';
+    const bin=Uint8Array.from(atob(s),c=>c.charCodeAt(0));
+    const json=m[1]==='z'?await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text():new TextDecoder().decode(bin);
+    const list=JSON.parse(json).map(([index,name,address])=>({index:String(index),name:name||'',address:address||''})).filter(i=>norm(i.index));
+    merge(list,true);
+    try{localStorage.setItem('scan_synced',new Date().toLocaleString('uk-UA'))}catch(e){}
+    toast(`✅ База оновлена з «Склад»: ${list.length} товарів`);
+  }catch(e){toast('Не вдалося прочитати базу з посилання')}
+  try{history.replaceState(null,'',location.pathname+location.search)}catch(e){location.hash=''}
+}
+importFromHash();addEventListener('hashchange',importFromHash);
+
 setTimeout(()=>{getSched().then(()=>{$('#ocrState').textContent='✅ Розпізнавання готове — камера бачитиме одразу'}).catch(()=>{$('#ocrState').textContent='⚠️ Не вдалося підготувати розпізнавання — перевір інтернет'})},800); // розпізнавання готується одразу, поки ти вводиш індекс
 if(location.protocol==='http:'&&location.hostname!=='localhost')toast('Відкрий через https, інакше камера не запрацює');
 </script>
