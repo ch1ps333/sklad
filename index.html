@@ -176,13 +176,14 @@ function parseImport(txt){
     if(!p[0]||/^(індекс|индекс|index|код)$/i.test(p[0]))return;
     if(/^так$/i.test(p[4]||'')){} // done flag ignored
     const b=(p[3]||'').trim(),brand=(b&&!/^[\d.,]+$/.test(b)&&!/^так$/i.test(b))?b:'';
-    out.push({index:p[0],name:p[1]||'',address:p[2]||'',brand});
+    const barcode=(p[6]||'').replace(/\D/g,'');
+    out.push({index:p[0],name:p[1]||'',address:p[2]||'',brand,barcode});
   });
   return out;
 }
 function merge(list,replace){
   const map=new Map(replace?[]:items.map(i=>[norm(i.index),i]));
-  list.forEach(n=>{const k=norm(n.index);const o=map.get(k);map.set(k,{...(o||{}),...n,name:n.name||o?.name||'',address:n.address||o?.address||'',brand:n.brand||o?.brand||'',ref:o?.ref})});
+  list.forEach(n=>{const k=norm(n.index);const o=map.get(k);map.set(k,{...(o||{}),...n,name:n.name||o?.name||'',address:n.address||o?.address||'',brand:n.brand||o?.brand||'',barcode:n.barcode||o?.barcode||'',ref:o?.ref})});
   if(replace)items.forEach(o=>{const m=map.get(norm(o.index));if(m&&o.ref)m.ref=o.ref});
   items=[...map.values()];save();render();
 }
@@ -367,6 +368,8 @@ function buildIndex(){
   list.forEach(it=>{const n=norm(it.index),c=n.replace(/^[A-Z]{1,4}(?=\d{3})/,'');if(c===n||c.length<4)return;
     const k=opt.loose?loose(c):c;if(m.has(k))return;cores.set(k,cores.has(k)&&cores.get(k)!==it?null:it)});
   cores.forEach((it,k)=>{if(it)m.set(k,it)}); // якщо однаковий номер у кількох товарів — не вгадуємо
+  // штрихкоди з накладних (EAN): коробка знаходиться за штрихкодом
+  list.forEach(it=>{const d=String(it.barcode||'').replace(/\D/g,'');if(d.length>=8&&!m.has(d))m.set(d,it)});
   return m;
 }
 function matchToken(tok,idx){
@@ -536,7 +539,7 @@ $('#pq').oninput=()=>{
   const q=$('#pq').value.trim(),nq=norm(q),lq=q.toLowerCase();
   renderBrands();
   if(!q&&!pBrand){$('#pres').innerHTML='';return}
-  const f=items.filter(it=>(!pBrand||(it.brand||'').toLowerCase()===pBrand)&&(!q||norm(it.index).includes(nq)||(it.name||'').toLowerCase().includes(lq)||(it.brand||'').toLowerCase().includes(lq)))
+  const f=items.filter(it=>(!pBrand||(it.brand||'').toLowerCase()===pBrand)&&(!q||norm(it.index).includes(nq)||(it.name||'').toLowerCase().includes(lq)||(it.brand||'').toLowerCase().includes(lq)||(nq.length>=4&&String(it.barcode||'').includes(nq))))
     .sort((a,b)=>(a.address||'').localeCompare(b.address||'','uk',{numeric:true})).slice(0,pBrand?200:30);
   $('#pres').innerHTML=(pBrand?`<div class="mut" style="padding:8px 0 0">${esc(f.length)} товарів</div>`:'')+(f.length?f.map(it=>`<div class="it" style="grid-template-columns:1fr auto"><div class="n">${esc(it.name||'(без назви)')}</div><div class="a" style="grid-column:2;font-size:22px">${esc(it.address||'—')}</div><div class="i">${esc(it.index)}${it.brand?' · '+esc(it.brand):''}</div></div>`).join(''):'<div class="mut" style="padding:10px 0">Немає в базі</div>');
 };
@@ -558,7 +561,7 @@ async function importFromHash(){
     let s=m[2].replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';
     const bin=Uint8Array.from(atob(s),c=>c.charCodeAt(0));
     const json=m[1]==='z'?await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text():new TextDecoder().decode(bin);
-    const list=JSON.parse(json).map(([index,name,address,brand])=>({index:String(index),name:name||'',address:address||'',brand:brand||''})).filter(i=>norm(i.index));
+    const list=JSON.parse(json).map(([index,name,address,brand,barcode])=>({index:String(index),name:name||'',address:address||'',brand:brand||'',barcode:String(barcode||'').replace(/\D/g,'')})).filter(i=>norm(i.index));
     merge(list,true);
     try{localStorage.setItem('scan_synced',new Date().toLocaleString('uk-UA'))}catch(e){}
     toast(`✅ База оновлена з «Склад»: ${list.length} товарів`);
