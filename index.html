@@ -84,7 +84,8 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:13p
   <div class="mut" style="margin:8px 2px 14px">Наводиш камеру на коробку — програма читає індекс, показує назву й адресу, куди ставити, і пищить. Працює по базі з вкладки «База».</div>
   <div class="card">
     <div class="mut" style="margin-bottom:6px">Або набери індекс вручну:</div>
-    <input type="search" id="pq" placeholder="Індекс або назва" autocomplete="off" autocapitalize="characters">
+    <input type="search" id="pq" placeholder="Індекс, назва або виробник" autocomplete="off" autocapitalize="characters">
+    <div id="brands" class="row" style="margin-top:8px"></div>
     <div id="pres"></div>
   </div>
   <div class="card">
@@ -174,13 +175,14 @@ function parseImport(txt){
     p=p.map(x=>x.trim());
     if(!p[0]||/^(індекс|индекс|index|код)$/i.test(p[0]))return;
     if(/^так$/i.test(p[4]||'')){} // done flag ignored
-    out.push({index:p[0],name:p[1]||'',address:p[2]||''});
+    const b=(p[3]||'').trim(),brand=(b&&!/^[\d.,]+$/.test(b)&&!/^так$/i.test(b))?b:'';
+    out.push({index:p[0],name:p[1]||'',address:p[2]||'',brand});
   });
   return out;
 }
 function merge(list,replace){
   const map=new Map(replace?[]:items.map(i=>[norm(i.index),i]));
-  list.forEach(n=>{const k=norm(n.index);const o=map.get(k);map.set(k,{...(o||{}),...n,name:n.name||o?.name||'',address:n.address||o?.address||'',ref:o?.ref})});
+  list.forEach(n=>{const k=norm(n.index);const o=map.get(k);map.set(k,{...(o||{}),...n,name:n.name||o?.name||'',address:n.address||o?.address||'',brand:n.brand||o?.brand||'',ref:o?.ref})});
   if(replace)items.forEach(o=>{const m=map.get(norm(o.index));if(m&&o.ref)m.ref=o.ref});
   items=[...map.values()];save();render();
 }
@@ -190,6 +192,7 @@ $('#clearAll').onclick=async()=>{if(!await confirmDlg('Видалити всю �
 
 /* ================= list ================= */
 function render(){
+  try{renderBrands()}catch(e){}
   $('#cnt').textContent=items.length;
   const q=$('#q').value.trim(),nq=norm(q),lq=q.toLowerCase();
   const f=items.map((it,i)=>[it,i]).filter(([it])=>!q||norm(it.index).includes(nq)||(it.name||'').toLowerCase().includes(lq)||norm(it.address).includes(nq))
@@ -528,12 +531,23 @@ $('#sPhoto').onchange=async e=>{
 };
 
 /* ================= РОЗМІЩЕННЯ: ручний пошук ================= */
+let pBrand='';
 $('#pq').oninput=()=>{
   const q=$('#pq').value.trim(),nq=norm(q),lq=q.toLowerCase();
-  if(!q){$('#pres').innerHTML='';return}
-  const f=items.filter(it=>norm(it.index).includes(nq)||(it.name||'').toLowerCase().includes(lq)).slice(0,20);
-  $('#pres').innerHTML=f.length?f.map(it=>`<div class="it" style="grid-template-columns:1fr auto"><div class="n">${esc(it.name||'(без назви)')}</div><div class="a" style="grid-column:2;font-size:22px">${esc(it.address||'—')}</div><div class="i">${esc(it.index)}</div></div>`).join(''):'<div class="mut" style="padding:10px 0">Немає в базі</div>';
+  renderBrands();
+  if(!q&&!pBrand){$('#pres').innerHTML='';return}
+  const f=items.filter(it=>(!pBrand||(it.brand||'').toLowerCase()===pBrand)&&(!q||norm(it.index).includes(nq)||(it.name||'').toLowerCase().includes(lq)||(it.brand||'').toLowerCase().includes(lq)))
+    .sort((a,b)=>(a.address||'').localeCompare(b.address||'','uk',{numeric:true})).slice(0,pBrand?200:30);
+  $('#pres').innerHTML=(pBrand?`<div class="mut" style="padding:8px 0 0">${esc(f.length)} товарів</div>`:'')+(f.length?f.map(it=>`<div class="it" style="grid-template-columns:1fr auto"><div class="n">${esc(it.name||'(без назви)')}</div><div class="a" style="grid-column:2;font-size:22px">${esc(it.address||'—')}</div><div class="i">${esc(it.index)}${it.brand?' · '+esc(it.brand):''}</div></div>`).join(''):'<div class="mut" style="padding:10px 0">Немає в базі</div>');
 };
+// кнопки-виробники: тап — показати всі товари цього виробника
+function renderBrands(){
+  const cnt=new Map();items.forEach(it=>{const b=(it.brand||'').trim();if(b){const k=b.toLowerCase();const c=cnt.get(k)||{name:b,n:0};c.n++;cnt.set(k,c)}});
+  const arr=[...cnt.entries()].sort((a,b)=>b[1].n-a[1].n);
+  $('#brands').innerHTML=arr.length?arr.map(([k,c])=>`<button class="btn sm${k===pBrand?' pri':''}" data-b="${esc(k)}">${esc(c.name)} <span class="badge">${c.n}</span></button>`).join(''):'<span class="mut">Виробники з\'являться після нових накладних у «Склад»</span>';
+}
+$('#brands').onclick=e=>{const b=e.target.closest('[data-b]');if(!b)return;pBrand=pBrand===b.dataset.b?'':b.dataset.b;$('#pq').oninput()};
+
 
 renderRecent();
 render();
@@ -544,7 +558,7 @@ async function importFromHash(){
     let s=m[2].replace(/-/g,'+').replace(/_/g,'/');while(s.length%4)s+='=';
     const bin=Uint8Array.from(atob(s),c=>c.charCodeAt(0));
     const json=m[1]==='z'?await new Response(new Blob([bin]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text():new TextDecoder().decode(bin);
-    const list=JSON.parse(json).map(([index,name,address])=>({index:String(index),name:name||'',address:address||''})).filter(i=>norm(i.index));
+    const list=JSON.parse(json).map(([index,name,address,brand])=>({index:String(index),name:name||'',address:address||'',brand:brand||''})).filter(i=>norm(i.index));
     merge(list,true);
     try{localStorage.setItem('scan_synced',new Date().toLocaleString('uk-UA'))}catch(e){}
     toast(`✅ База оновлена з «Склад»: ${list.length} товарів`);
