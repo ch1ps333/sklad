@@ -352,7 +352,8 @@ function tryBarcode(c,idx){
     bcCtx.drawImage(vid,c.x,sy,c.w,sh,0,0,bcCan.width,bcCan.height);
     let r;try{r=R.decodeWithState(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(bcCan))))}catch(e){try{R.reset()}catch(_){}continue}
     const text=String(r.getText()||'').trim();if(!text)continue;lastBc=text;
-    const it=matchToken(key(text),idx);if(!it)continue;
+    // штрихкод: лише точний збіг (зі штрихкодом із накладної або з індексом)
+    const it=idx.get(key(text))||idx.get(text.replace(/\D/g,''))||idx.get(norm(text));if(!it)continue;
     const pts=(r.getResultPoints()||[]).map(p=>[c.x+p.getX()/s,sy+p.getY()/s]);
     let box;if(pts.length){const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys),pd=Math.max(20,(x1-x0)*0.05);box=[x0-pd,Math.min(y0,y1)-pd*2,x1+pd,Math.max(y0,y1)+pd*2]}
     else box=[c.x,sy,c.x+c.w,sy+sh];
@@ -375,8 +376,11 @@ function buildIndex(){
 function matchToken(tok,idx){
   if(tok.length<3)return null;
   const hit=idx.get(tok);if(hit)return hit;
-  if(tok.length>=6){for(const [k,it] of idx){if(Math.abs(k.length-tok.length)<=1&&lev(k,tok)<=1)return it}}
-  for(const [k,it] of idx){if(k.length>=5&&tok.length>k.length&&tok.includes(k))return it}
+  const isNum=s=>/^\d+$/.test(s);
+  // довгі числа (штрихкоди) — тільки точний збіг: штрихкоди різних товарів відрізняються 1–2 цифрами
+  if(isNum(tok)&&tok.length>=8)return null;
+  if(tok.length>=6){for(const [k,it] of idx){if(isNum(k)&&k.length>=8)continue;if(Math.abs(k.length-tok.length)<=1&&lev(k,tok)<=1)return it}}
+  for(const [k,it] of idx){if(isNum(k)&&k.length>=8)continue;if(k.length>=5&&tok.length>k.length&&tok.includes(k))return it}
   return null;
 }
 async function ocrLoop(){
