@@ -346,12 +346,15 @@ function matchToken(tok,idx){
 async function ocrLoop(){
   let w;try{w=await getWorker()}catch(e){setInfo('❌ Не вдалося завантажити розпізнавання. Перевір інтернет.');return}
   setInfo(target?'Наводь камеру на полицю — шукаю індекс':'Наводь камеру на коробки');
-  const idx=buildIndex();let fps=0;
+  const idx=buildIndex();let fps=0,pass=0,curPsm='11';
   while(running&&mode==='ocr'){
     if(!vid.videoWidth){await new Promise(r=>setTimeout(r,100));continue}
     const t0=performance.now();
-    const c=cropRect();const OW=1100;const sc=OW/c.w;
-    ocrCan.width=OW;ocrCan.height=Math.round(c.h*sc);
+    // кадри по черзі: звичайний / стиснутий удвічі по ширині (для індексів з літерами врозбивку: W H T 0 0 0 2 3 2)
+    pass^=1;const sq=pass?0.5:1,psm=pass?'6':'11';
+    if(psm!==curPsm){try{await w.setParameters({tessedit_pageseg_mode:psm})}catch(e){}curPsm=psm}
+    const c=cropRect();const OW=1100;const sc=OW/c.w,sx=sc*sq;
+    ocrCan.width=Math.round(OW*sq);ocrCan.height=Math.round(c.h*sc);
     ocrCtx.filter='grayscale(1) contrast(1.4)';
     ocrCtx.drawImage(vid,c.x,c.y,c.w,c.h,0,0,ocrCan.width,ocrCan.height);
     let data;try{({data}=await w.recognize(ocrCan,{},{text:true,blocks:true}))}catch(e){await new Promise(r=>setTimeout(r,300));continue}
@@ -364,13 +367,13 @@ async function ocrLoop(){
       ws.sort((a,b)=>a.bbox.x0-b.bbox.x0);
       for(let i=0;i<ws.length;i++){
         let tok='';let bb=null;
-        for(let j=i;j<Math.min(ws.length,i+3);j++){
+        for(let j=i;j<Math.min(ws.length,i+12);j++){
           tok+=key(ws[j].text);const b=ws[j].bbox;
           bb=bb?{x0:Math.min(bb.x0,b.x0),y0:Math.min(bb.y0,b.y0),x1:Math.max(bb.x1,b.x1),y1:Math.max(bb.y1,b.y1)}:{...b};
           const it=matchToken(tok,idx);
           if(it&&!seen.has(it)){
             seen.add(it);
-            const pad=6,x0=c.x+(bb.x0-pad)/sc,y0=c.y+(bb.y0-pad)/sc,x1=c.x+(bb.x1+pad)/sc,y1=c.y+(bb.y1+pad)/sc;
+            const pad=6,x0=c.x+(bb.x0-pad)/sx,y0=c.y+(bb.y0-pad)/sc,x1=c.x+(bb.x1+pad)/sx,y1=c.y+(bb.y1+pad)/sc;
             const main=!!target;
             hits.push({poly:[[x0,y0],[x1,y0],[x1,y1],[x0,y1]],label:target?'✓ '+(it.address||'ЗНАЙДЕНО'):(it.address||'—')+'  '+(it.name||'').slice(0,22),color:main?'#2ecc71':'#ffb020',main,t:now});
             foundMain=foundMain||it;break;
