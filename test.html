@@ -388,7 +388,14 @@ const snapCan=document.createElement('canvas'),snapCtx=snapCan.getContext('2d',{
 const detCan=document.createElement('canvas'),detCtx=detCan.getContext('2d',{willReadFrequently:true});
 const lineCans=[];
 function buildIndex(){
-  const m=new Map();(target?[target]:items).forEach(it=>{const k=key(it.index);if(k.length>=2)m.set(k,it)});return m;
+  const m=new Map();const list=target?[target]:items;
+  list.forEach(it=>{const k=key(it.index);if(k.length>=2)m.set(k,it)});
+  // індекс без літерної приставки: у базі FE26045, на коробці лише 26045
+  const cores=new Map();
+  list.forEach(it=>{const n=norm(it.index),c=n.replace(/^[A-Z]{1,4}(?=\d{3})/,'');if(c===n||c.length<4)return;
+    const k=opt.loose?loose(c):c;if(m.has(k))return;cores.set(k,cores.has(k)&&cores.get(k)!==it?null:it)});
+  cores.forEach((it,k)=>{if(it)m.set(k,it)}); // якщо однаковий номер у кількох товарів — не вгадуємо
+  return m;
 }
 // повертає [item, 'full'|'part']
 function matchToken(tok,idx){
@@ -398,7 +405,7 @@ function matchToken(tok,idx){
     if(k.length>=6&&Math.abs(k.length-tok.length)<=1&&lev(k,tok)<=1)return[it,'full'];
     if(k.length>=9&&Math.abs(k.length-tok.length)<=2&&lev(k,tok)<=2)return[it,'full'];
   }
-  for(const [k,it] of idx){if(k.length>=4&&tok.length>k.length&&tok.includes(k))return[it,'full']}
+  for(const [k,it] of idx){if(k.length>=5&&tok.length>k.length&&tok.includes(k))return[it,'full']}
   if(target){ // частковий збіг: прочиталась більша частина індексу
     for(const [k,it] of idx){if(tok.length>=Math.max(4,Math.ceil(k.length*0.6))&&k.includes(tok))return[it,'part']}
   }

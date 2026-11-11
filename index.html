@@ -327,13 +327,20 @@ function flattenWords(data){
 }
 const ocrCan=document.createElement('canvas'),ocrCtx=ocrCan.getContext('2d',{willReadFrequently:true});
 function buildIndex(){
-  const m=new Map();(target?[target]:items).forEach(it=>{const k=key(it.index);if(k.length>=2)m.set(k,it)});return m;
+  const m=new Map();const list=target?[target]:items;
+  list.forEach(it=>{const k=key(it.index);if(k.length>=2)m.set(k,it)});
+  // індекс без літерної приставки: у базі FE26045, на коробці лише 26045
+  const cores=new Map();
+  list.forEach(it=>{const n=norm(it.index),c=n.replace(/^[A-Z]{1,4}(?=\d{3})/,'');if(c===n||c.length<4)return;
+    const k=opt.loose?loose(c):c;if(m.has(k))return;cores.set(k,cores.has(k)&&cores.get(k)!==it?null:it)});
+  cores.forEach((it,k)=>{if(it)m.set(k,it)}); // якщо однаковий номер у кількох товарів — не вгадуємо
+  return m;
 }
 function matchToken(tok,idx){
   if(tok.length<3)return null;
   const hit=idx.get(tok);if(hit)return hit;
   if(tok.length>=6){for(const [k,it] of idx){if(Math.abs(k.length-tok.length)<=1&&lev(k,tok)<=1)return it}}
-  for(const [k,it] of idx){if(k.length>=4&&tok.length>k.length&&tok.includes(k))return it}
+  for(const [k,it] of idx){if(k.length>=5&&tok.length>k.length&&tok.includes(k))return it}
   return null;
 }
 async function ocrLoop(){
