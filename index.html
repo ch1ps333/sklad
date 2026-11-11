@@ -142,6 +142,7 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:13p
 <input type="file" id="refIn" accept="image/*" class="hide">
 
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script src="https://unpkg.com/@zxing/library@0.21.3"></script>
 <script>
 /* ================= helpers ================= */
 const $=s=>document.querySelector(s);
@@ -326,6 +327,35 @@ function flattenWords(data){
   return out;
 }
 const ocrCan=document.createElement('canvas'),ocrCtx=ocrCan.getContext('2d',{willReadFrequently:true});
+/* ---- штрихкоди: часто під штрихкодом надрукований сам індекс (7M0412341A, WHT000232) ---- */
+let bcReader=null,lastBc='';
+function getBcReader(){
+  if(bcReader||typeof ZXing==='undefined')return bcReader;
+  try{const Z=ZXing,F=Z.BarcodeFormat,hints=new Map();
+    hints.set(Z.DecodeHintType.POSSIBLE_FORMATS,[F.CODE_128,F.CODE_39,F.CODE_93,F.EAN_13,F.EAN_8,F.UPC_A,F.UPC_E,F.ITF,F.CODABAR,F.QR_CODE,F.DATA_MATRIX]);
+    hints.set(Z.DecodeHintType.TRY_HARDER,true);
+    bcReader=new Z.MultiFormatReader();bcReader.setHints(hints)}catch(e){bcReader=null}
+  return bcReader;
+}
+const bcCan=document.createElement('canvas'),bcCtx=bcCan.getContext('2d',{willReadFrequently:true});
+function tryBarcode(c,idx){
+  const R=getBcReader();if(!R)return null;
+  const W=Math.min(1280,Math.round(c.w)),s=W/c.w,H=Math.round(c.h*s);
+  // уся рамка, потім верхня й нижня половини (якщо в рамці два штрихкоди)
+  for(const [fy,fh] of [[0,1],[0,0.55],[0.45,0.55]]){
+    const sy=c.y+c.h*fy,sh=c.h*fh;
+    bcCan.width=W;bcCan.height=Math.max(20,Math.round(sh*s));
+    bcCtx.drawImage(vid,c.x,sy,c.w,sh,0,0,bcCan.width,bcCan.height);
+    let r;try{r=R.decodeWithState(new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(new ZXing.HTMLCanvasElementLuminanceSource(bcCan))))}catch(e){try{R.reset()}catch(_){}continue}
+    const text=String(r.getText()||'').trim();if(!text)continue;lastBc=text;
+    const it=matchToken(key(text),idx);if(!it)continue;
+    const pts=(r.getResultPoints()||[]).map(p=>[c.x+p.getX()/s,sy+p.getY()/s]);
+    let box;if(pts.length){const xs=pts.map(p=>p[0]),ys=pts.map(p=>p[1]);const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys),pd=Math.max(20,(x1-x0)*0.05);box=[x0-pd,Math.min(y0,y1)-pd*2,x1+pd,Math.max(y0,y1)+pd*2]}
+    else box=[c.x,sy,c.x+c.w,sy+sh];
+    return{it,box,text};
+  }
+  return null;
+}
 function buildIndex(){
   const m=new Map();const list=target?[target]:items;
   list.forEach(it=>{const k=key(it.index);if(k.length>=2)m.set(k,it)});
@@ -353,7 +383,14 @@ async function ocrLoop(){
     // кадри по черзі: звичайний / стиснутий удвічі по ширині (для індексів з літерами врозбивку: W H T 0 0 0 2 3 2)
     pass^=1;const sq=pass?0.5:1,psm=pass?'6':'11';
     if(psm!==curPsm){try{await w.setParameters({tessedit_pageseg_mode:psm})}catch(e){}curPsm=psm}
-    const c=cropRect();const OW=1100;const sc=OW/c.w,sx=sc*sq;
+    const c=cropRect();
+    // 1) штрихкод — швидко й надійно
+    const bh=tryBarcode(c,idx);
+    if(bh){const [x0,y0,x1,y1]=bh.box,now=performance.now();
+      hits.push({poly:[[x0,y0],[x1,y0],[x1,y1],[x0,y1]],label:target?'✓ '+(bh.it.address||'ЗНАЙДЕНО'):(bh.it.address||'—')+'  '+(bh.it.name||'').slice(0,22),color:target?'#2ecc71':'#ffb020',main:!!target,t:now});
+      beep();showFound(bh.it);setInfo(`Штрихкод: ${esc(bh.text)} ✓`);await new Promise(r=>setTimeout(r,150));continue}
+    // 2) текст
+    const OW=1100;const sc=OW/c.w,sx=sc*sq;
     ocrCan.width=Math.round(OW*sq);ocrCan.height=Math.round(c.h*sc);
     ocrCtx.filter='grayscale(1) contrast(1.4)';
     ocrCtx.drawImage(vid,c.x,c.y,c.w,c.h,0,0,ocrCan.width,ocrCan.height);
@@ -383,7 +420,7 @@ async function ocrLoop(){
     }
     if(foundMain){beep();showFound(foundMain)}
     const dt=performance.now()-t0;fps=dt;
-    setInfo(`${target?'Шукаю '+esc(target.index):'Сканую'} · кадр ${Math.round(dt)} мс${zoom>1?' · наблизь індекс у рамку':''}`);
+    setInfo(`${target?'Шукаю '+esc(target.index):'Сканую'} · кадр ${Math.round(dt)} мс${lastBc?' · штрихкод: '+esc(lastBc.slice(0,20)):''}${zoom>1?' · наблизь індекс у рамку':''}`);lastBc='';
     await new Promise(r=>setTimeout(r,30));
   }
 }
