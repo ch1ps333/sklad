@@ -80,6 +80,10 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:13p
 
 <!-- ===== РОЗМІЩЕННЯ ===== -->
 <section id="pPlace">
+  <div id="hwBar" class="row" style="justify-content:center;gap:8px;padding:10px;border-radius:12px;background:#232833;margin-bottom:10px;font-weight:600">
+    <span id="hwDot" style="width:12px;height:12px;border-radius:50%;background:#666;display:inline-block"></span><span id="hwTxt">Торкнись тут, щоб увімкнути сканер Zebra</span>
+    <input id="hwIn" inputmode="none" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Поле для сканера" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+  </div>
   <div id="hwRes" class="card hide" style="text-align:center;padding:18px 14px"></div>
   <button class="btn ac big" id="startAll">🎥 Навести на коробку</button>
   <div class="mut" style="margin:8px 2px 14px">Наводиш камеру на коробку — програма читає індекс, показує назву й адресу, куди ставити, і пищить. Працює по базі з вкладки «База».<br>📟 <b>Сканер Zebra:</b> просто натисни курок на штрихкоді — результат з'явиться вгорі.</div>
@@ -258,7 +262,7 @@ async function startCam(t,m){
   running=true;resize();requestAnimationFrame(draw);
   if(mode==='ocr')ocrLoop();else imgLoop();
 }
-function stopCam(){running=false;stream&&stream.getTracks().forEach(t=>t.stop());stream=null;$('#cam').classList.add('hide');try{wakeLock&&wakeLock.release()}catch(e){};wakeLock=null}
+function stopCam(){setTimeout(()=>{try{hwArm()}catch(e){}},400);running=false;stream&&stream.getTracks().forEach(t=>t.stop());stream=null;$('#cam').classList.add('hide');try{wakeLock&&wakeLock.release()}catch(e){};wakeLock=null}
 $('#stop').onclick=stopCam;
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&running)stopCam()});
 $('#zoom').onclick=e=>{const b=e.target.closest('button');if(!b)return;zoom=+b.dataset.z;document.querySelectorAll('#zoom button').forEach(x=>x.classList.toggle('on',x===b))};
@@ -568,6 +572,7 @@ document.addEventListener('keydown',e=>{
   const ae=document.activeElement,tag=ae&&ae.tagName;
   const inField=tag==='INPUT'||tag==='TEXTAREA';
   // у полі ручного пошуку на «Розміщенні» Enter = знайти точно
+  if(inField&&ae.id==='hwIn'){if(e.key==='Enter'||e.key==='Tab'){e.preventDefault();hwFlush()}return}
   if(inField&&ae.id==='pq'){if(e.key==='Enter'){e.preventDefault();const v=ae.value;ae.value='';$('#pq').oninput();hwLookup(v)}return}
   if(inField)return; // в інших полях не заважаємо
   const now=performance.now();
@@ -576,6 +581,29 @@ document.addEventListener('keydown',e=>{
   if(e.key==='Enter'||e.key==='Tab'){if(hwBuf.length>=3){e.preventDefault();const v=hwBuf;hwBuf='';hwLookup(v)}return}
   if(e.key.length===1){hwBuf+=e.key;clearTimeout(hwTimer);hwTimer=setTimeout(()=>{if(hwBuf.length>=4){const v=hwBuf;hwBuf='';hwLookup(v)}},250)}
 });
+
+// Поле, яке завжди тримає курсор на «Розміщенні»: сканер «друкує» в нього код (без екранної клавіатури — inputmode=none)
+const hwIn=$('#hwIn');let hwInT=null;
+function hwFlush(){clearTimeout(hwInT);const v=hwIn.value;hwIn.value='';if(norm(v).length>=3)hwLookup(v)}
+hwIn.addEventListener('input',()=>{clearTimeout(hwInT);hwInT=setTimeout(hwFlush,200)}); // код без Enter: чекаємо паузу 0,2 с
+function placeOn(){return $('#pPlace').classList.contains('on')&&$('#cam').classList.contains('hide')}
+let hwOn=/Android/i.test(navigator.userAgent); // Zebra = Android: вмикаємо самі; на iPhone — після тапу по смужці
+function hwArm(){
+  const ae=document.activeElement;
+  if(!hwOn||!placeOn())return;
+  if(ae&&ae!==hwIn&&(ae.tagName==='INPUT'||ae.tagName==='TEXTAREA'))return; // людина друкує в іншому полі
+  try{hwIn.focus({preventScroll:true})}catch(e){hwIn.focus()}
+}
+function hwState(){const ok=document.activeElement===hwIn;$('#hwDot').style.background=ok?'#2ecc71':'#666';$('#hwTxt').textContent=ok?'📟 Сканер Zebra готовий — тисни курок':'Торкнись тут, щоб увімкнути сканер Zebra'}
+hwIn.addEventListener('focus',hwState);
+hwIn.addEventListener('blur',()=>{hwState();setTimeout(hwArm,300)});
+$('#hwBar').addEventListener('click',()=>{unlockAudio();hwOn=true;hwArm()});
+document.addEventListener('focusout',e=>{if(e.target!==hwIn&&(e.target.tagName==='INPUT'||e.target.tagName==='TEXTAREA'))setTimeout(hwArm,300)});
+document.addEventListener('click',e=>{if(!e.target.closest('input,textarea,select,a'))setTimeout(hwArm,50)});
+document.querySelectorAll('.tabs button').forEach(b=>b.addEventListener('click',()=>setTimeout(hwArm,50)));
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)setTimeout(hwArm,300)});
+setInterval(()=>{if(document.activeElement!==hwIn)hwArm()},1500); // страховка: повертаємо курсор
+setTimeout(hwArm,500);
 
 let pBrand='';
 $('#pq').oninput=()=>{
