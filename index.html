@@ -80,8 +80,9 @@ textarea{min-height:110px;font-family:ui-monospace,Menlo,monospace;font-size:13p
 
 <!-- ===== РОЗМІЩЕННЯ ===== -->
 <section id="pPlace">
+  <div id="hwRes" class="card hide" style="text-align:center;padding:18px 14px"></div>
   <button class="btn ac big" id="startAll">🎥 Навести на коробку</button>
-  <div class="mut" style="margin:8px 2px 14px">Наводиш камеру на коробку — програма читає індекс, показує назву й адресу, куди ставити, і пищить. Працює по базі з вкладки «База».</div>
+  <div class="mut" style="margin:8px 2px 14px">Наводиш камеру на коробку — програма читає індекс, показує назву й адресу, куди ставити, і пищить. Працює по базі з вкладки «База».<br>📟 <b>Сканер Zebra:</b> просто натисни курок на штрихкоді — результат з'явиться вгорі.</div>
   <div class="card">
     <div class="mut" style="margin-bottom:6px">Або набери індекс вручну:</div>
     <input type="search" id="pq" placeholder="Індекс, назва або виробник" autocomplete="off" autocapitalize="characters">
@@ -538,6 +539,44 @@ $('#sPhoto').onchange=async e=>{
 };
 
 /* ================= РОЗМІЩЕННЯ: ручний пошук ================= */
+
+/* ================= Апаратний сканер (Zebra / DataWedge = клавіатура) ================= */
+// Сканер «набирає» код дуже швидко і натискає Enter. Ловимо такий ввід будь-де на сторінці.
+let hwBuf='',hwLast=0,hwTimer=null;
+function hwIndex(){const save=target;target=null;const m=buildIndex();target=save;return m}
+function hwLookup(code){
+  code=String(code||'').trim();if(norm(code).length<3)return;
+  unlockAudio();
+  const idx=hwIndex(),d=code.replace(/\D/g,'');
+  const it=idx.get(key(code))||(d.length>=8?idx.get(d):null)||idx.get(norm(code))||matchToken(key(code),idx);
+  // переходимо на «Розміщення», якщо були на іншій вкладці
+  const tb=document.querySelector('.tabs button[data-t="pPlace"]');if(tb&&!tb.classList.contains('on'))tb.click();
+  const r=$('#hwRes');r.classList.remove('hide');
+  if(it){
+    r.style.background='#173b25';r.style.borderColor='#2ecc71';
+    r.innerHTML=`<div class="mut">Ставити на</div><div style="font-size:52px;font-weight:900;color:var(--ac);line-height:1.1;margin:6px 0">${esc(it.address||'—')}</div><div style="font-size:19px;font-weight:600">${esc(it.name||'')}</div><div class="i" style="font-family:ui-monospace,Menlo,monospace;color:var(--mut);margin-top:4px">${esc(it.index)}${it.brand?' · '+esc(it.brand):''}</div><div class="mut" style="margin-top:6px">скан: ${esc(code)}</div>`;
+    lastBeep=0;beep();
+  }else{
+    r.style.background='#3a1d1d';r.style.borderColor='#ff5c5c';
+    r.innerHTML=`<div style="font-size:24px;font-weight:800;color:#ff8a8a">Не знайдено в базі</div><div class="mut" style="margin-top:6px">скан: <b>${esc(code)}</b></div><div class="mut" style="margin-top:6px">Можливо, базу не оновлено — відкрий сканер кнопкою «🎥 Відкрити сканер з базою» у «Склад».</div>`;
+    try{if(opt.beep&&actx){const o=actx.createOscillator(),g=actx.createGain();o.frequency.value=330;g.gain.setValueAtTime(.25,actx.currentTime);g.gain.exponentialRampToValueAtTime(.001,actx.currentTime+.35);o.connect(g).connect(actx.destination);o.start();o.stop(actx.currentTime+.36)}}catch(e){}
+  }
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+document.addEventListener('keydown',e=>{
+  if(!$('#cam').classList.contains('hide'))return;
+  const ae=document.activeElement,tag=ae&&ae.tagName;
+  const inField=tag==='INPUT'||tag==='TEXTAREA';
+  // у полі ручного пошуку на «Розміщенні» Enter = знайти точно
+  if(inField&&ae.id==='pq'){if(e.key==='Enter'){e.preventDefault();const v=ae.value;ae.value='';$('#pq').oninput();hwLookup(v)}return}
+  if(inField)return; // в інших полях не заважаємо
+  const now=performance.now();
+  if(now-hwLast>120)hwBuf=''; // повільний ввід — це не сканер
+  hwLast=now;
+  if(e.key==='Enter'||e.key==='Tab'){if(hwBuf.length>=3){e.preventDefault();const v=hwBuf;hwBuf='';hwLookup(v)}return}
+  if(e.key.length===1){hwBuf+=e.key;clearTimeout(hwTimer);hwTimer=setTimeout(()=>{if(hwBuf.length>=4){const v=hwBuf;hwBuf='';hwLookup(v)}},250)}
+});
+
 let pBrand='';
 $('#pq').oninput=()=>{
   const q=$('#pq').value.trim(),nq=norm(q),lq=q.toLowerCase();
